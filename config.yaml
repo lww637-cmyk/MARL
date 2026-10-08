@@ -1,0 +1,43 @@
+data:
+  tickers:
+    wti: "CL=F"
+    brent: "BZ=F"
+  fred_series:
+    wti_spot: "DCOILWTICO"
+    brent_spot: "DCOILBRENTEU"
+    dxy: "DTWEXBGS"
+  start_date: "2015-01-01"
+  end_date: "2024-01-01"
+  features:
+    - close
+    - volume
+    - rsi
+    - macd
+    - sentiment_score
+    - dxy
+
+environment:
+  episode_length: 252
+  initial_capital: 100000
+  transaction_cost: 0.001
+
+agents:
+  learning_rate: 0.0003
+  batch_size: 64
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+
+training:
+  total_timesteps: 500000
+  eval_frequency: 10000
+  n_eval_episodes: 5
+  save_frequency: 50000
+
+evaluation:
+  metrics:
+    - cumulative_return
+    - sharpe_ratio
+    - max_drawdown
+    - volatility
+    - win_rate

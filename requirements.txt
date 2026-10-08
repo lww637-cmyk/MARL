@@ -1,0 +1,17 @@
+torch
+stable-baselines3
+pettingzoo
+yfinance
+pandas
+numpy
+matplotlib
+transformers
+streamlit
+plotly
+shap
+fredapi
+python-dotenv
+mlflow
+requests
+scipy
+ta
