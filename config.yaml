@@ -1,32 +1,46 @@
 data:
   tickers:
-    wti: "CL=F"
-    brent: "BZ=F"
-  fred_series:
-    wti_spot: "DCOILWTICO"
-    brent_spot: "DCOILBRENTEU"
-    dxy: "DTWEXBGS"
-  start_date: "2015-01-01"
-  end_date: "2024-01-01"
+    - "AAPL"
+    - "MSFT"
+    - "NVDA"
+    - "AMZN"
+    - "TSLA"
+  start_date: "2018-07-25"
+  end_date: "2023-12-31"
   features:
-    - close
-    - volume
-    - rsi
-    - macd
-    - sentiment_score
-    - dxy
+    price:
+      - close
+      - volume
+      - rsi
+      - macd
+      - bollinger_upper
+      - bollinger_lower
+    sentiment:
+      - sentiment_score
+      - sentiment_magnitude
 
 environment:
   episode_length: 252
   initial_capital: 100000
   transaction_cost: 0.001
+  n_agents: 2
 
 agents:
-  learning_rate: 0.0003
-  batch_size: 64
-  gamma: 0.99
-  epsilon_start: 1.0
-  epsilon_end: 0.01
+  price_agent:
+    observation: "price_and_technical"
+    learning_rate: 0.0003
+    batch_size: 64
+    gamma: 0.99
+  sentiment_agent:
+    observation: "company_specific_sentiment"
+    learning_rate: 0.0003
+    batch_size: 64
+    gamma: 0.99
+
+coordinator:
+  model: "claude-sonnet-4-6"
+  temperature: 0.2
+  max_tokens: 512
 
 training:
   total_timesteps: 500000
@@ -41,3 +55,6 @@ evaluation:
     - max_drawdown
     - volatility
     - win_rate
+  baselines:
+    - buy_and_hold
+    - marl_no_coordinator
