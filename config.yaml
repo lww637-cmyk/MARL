@@ -6,7 +6,7 @@ data:
     - "AMZN"
     - "TSLA"
   start_date: "2018-07-25"
-  end_date: "2023-12-31"
+  end_date: "2023-12-28"
   features:
     price:
       - close
