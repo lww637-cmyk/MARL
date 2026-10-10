@@ -32,11 +32,11 @@ SENTIMENT_FEATURES = [
 
 N_PRICE_FEATURES     = len(PRICE_FEATURES)      # 10
 N_SENTIMENT_FEATURES = len(SENTIMENT_FEATURES)  # 4
-N_SHARED             = N_TICKERS + 1            # portfolio weights + norm value
+N_SHARED = N_TICKERS + 2  # 5 stock weights + 1 cash weight + 1 norm value
 
 # Total obs sizes
-PRICE_OBS_SIZE     = N_PRICE_FEATURES * N_TICKERS + N_SHARED   # 50 + 6 = 56
-SENTIMENT_OBS_SIZE = N_SENTIMENT_FEATURES * N_TICKERS + N_SHARED  # 20 + 6 = 26
+PRICE_OBS_SIZE     = N_PRICE_FEATURES * N_TICKERS + N_SHARED   # 50 + 7 = 57
+SENTIMENT_OBS_SIZE = N_SENTIMENT_FEATURES * N_TICKERS + N_SHARED  # 20 + 7 = 27
 
 # Action = portfolio weights for 5 tickers + cash = 6 values
 ACTION_SIZE = N_TICKERS + 1
