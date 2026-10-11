@@ -43,10 +43,10 @@ coordinator:
   max_tokens: 2048
 
 training:
-  total_timesteps: 500000
+  total_timesteps: 2000000
   eval_frequency: 10000
   n_eval_episodes: 5
-  save_frequency: 50000
+  save_frequency: 100000
 
 evaluation:
   metrics:

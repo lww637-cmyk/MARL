@@ -250,25 +250,28 @@ class StockTradingEnv(AECEnv):
 
     def observe(self, agent: str) -> np.ndarray:
         """Return current observation for the given agent."""
-        date = self.common_dates[self.start_idx + self.timestep]
-        shared = np.append(self.portfolio_weights,
-                           self.portfolio_value / self.initial_capital)
+        date   = self.common_dates[self.start_idx + self.timestep]
+        shared = np.append(
+            self.portfolio_weights,
+            self.portfolio_value / self.initial_capital
+        )
 
         if agent == "price_agent":
             features = []
             for ticker in TICKERS:
                 row = self.dataset[ticker].loc[date]
-                features.extend([row[f] for f in PRICE_FEATURES])
-            return np.array(features + shared.tolist(),
-                            dtype=np.float32)
+                ticker_features = [row[f] for f in PRICE_FEATURES]
+                # Normalise raw close price to similar scale as other features
+                ticker_features[0] = ticker_features[0] / 1000.0
+                features.extend(ticker_features)
+            return np.array(features + shared.tolist(), dtype=np.float32)
 
         elif agent == "sentiment_agent":
             features = []
             for ticker in TICKERS:
                 row = self.dataset[ticker].loc[date]
                 features.extend([row[f] for f in SENTIMENT_FEATURES])
-            return np.array(features + shared.tolist(),
-                            dtype=np.float32)
+            return np.array(features + shared.tolist(), dtype=np.float32)
 
         return np.zeros(PRICE_OBS_SIZE, dtype=np.float32)
 
@@ -378,23 +381,30 @@ class StockTradingEnv(AECEnv):
 
     def _compute_reward(self) -> float:
         """
-        Sharpe-based reward using recent return window.
-        Penalises excessive drawdown.
+        Combined reward: daily return + Sharpe component - drawdown penalty.
+        Provides clearer gradient signal than pure Sharpe early in training.
         """
-        if len(self.returns_history) < 2:
+        if len(self.returns_history) < 1:
             return 0.0
 
-        returns = np.array(self.returns_history[-30:])
-        mean_r  = returns.mean()
-        std_r   = returns.std() + 1e-8
-        sharpe  = mean_r / std_r
+        # Daily return component (annualised)
+        daily_return = self.returns_history[-1]
+
+        # Sharpe component (only when enough history)
+        if len(self.returns_history) >= 10:
+            returns = np.array(self.returns_history[-30:])
+            sharpe  = returns.mean() / (returns.std() + 1e-8)
+        else:
+            sharpe  = 0.0
 
         # Drawdown penalty
         peak     = max(self.portfolio_history)
         drawdown = (peak - self.portfolio_value) / (peak + 1e-8)
-        penalty  = max(0.0, drawdown - 0.1) * 2.0  # penalise if >10% drawdown
+        penalty  = max(0.0, drawdown - 0.1) * 2.0
 
-        return float(sharpe - penalty)
+        # Weighted combination
+        reward = 0.4 * daily_return * 252 + 0.6 * sharpe - penalty
+        return float(reward)
 
     # ── render ───────────────────────────────────────────────────────────────
 

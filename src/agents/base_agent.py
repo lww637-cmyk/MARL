@@ -99,18 +99,19 @@ class BaseTrader:
 
     def build_model(self):
         """Initialise PPO model. Called by subclasses after super().__init__."""
-        vec_env     = self._make_single_env()
-        self.model  = PPO(
-            policy          = "MlpPolicy",
-            env             = vec_env,
-            learning_rate   = self.lr,
-            n_steps         = 512,
-            batch_size      = self.batch_size,
-            gamma           = self.gamma,
-            gae_lambda      = 0.95,
-            clip_range      = 0.2,
-            ent_coef        = 0.01,
-            verbose         = 0,
+        vec_env    = self._make_single_env()
+        self.model = PPO(
+            policy        = "MlpPolicy",
+            env           = vec_env,
+            learning_rate = self.lr,
+            n_steps       = 512,
+            batch_size    = self.batch_size,
+            gamma         = self.gamma,
+            gae_lambda    = 0.95,
+            clip_range    = 0.2,
+            ent_coef      = 0.01,
+            device        = "cpu",
+            verbose       = 0,
         )
 
     def train(self, total_timesteps: int):
