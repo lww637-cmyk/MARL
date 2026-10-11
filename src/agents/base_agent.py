@@ -30,50 +30,67 @@ class BaseTrader:
 
     def _make_single_env(self):
         """
-        Wraps the trading env into a single-agent Gym-compatible env
-        so stable-baselines3 can train one agent at a time.
+        Creates a single-agent Gym wrapper for SB3 training.
+        Bypasses PettingZoo AEC turn structure to avoid dead agent conflicts.
+        Each wrapper creates its own environment instance.
         """
         import gymnasium as gym
         agent_id = self.agent_id
-        aec_env  = self.env
+        config   = self.config
 
         class SingleAgentWrapper(gym.Env):
-            """Adapts PettingZoo AEC env to single-agent Gym interface."""
-
             def __init__(self):
                 super().__init__()
-                self.aec_env           = aec_env
-                self.observation_space = aec_env.observation_space(agent_id)
-                self.action_space      = aec_env.action_space(agent_id)
+                from src.environment.stock_env import StockTradingEnv
+                self._env         = StockTradingEnv(config, mode="train")
+                self.observation_space = self._env.observation_space(agent_id)
+                self.action_space      = self._env.action_space(agent_id)
+                self._step_count  = 0
+                self._max_steps   = config["environment"]["episode_length"]
 
             def reset(self, seed=None, options=None):
-                obs, info = self.aec_env.reset(seed=seed)
-                return self.aec_env.observe(agent_id), info
+                self._env.reset(seed=seed)
+                self._step_count = 0
+                return self._env.observe(agent_id), {}
 
             def step(self, action):
-                # Step our agent
-                self.aec_env.step(action)
-                reward     = self.aec_env.rewards.get(agent_id, 0.0)
-                terminated = self.aec_env.terminations.get(agent_id, False)
-                truncated  = self.aec_env.truncations.get(agent_id, False)
-                info       = self.aec_env.infos.get(agent_id, {})
+                self._step_count += 1
 
-                # Step other agent with random action
-                if self.aec_env.agents and \
-                self.aec_env.agent_selection != agent_id:
-                    other = self.aec_env.agent_selection
-                    if not self.aec_env.terminations.get(other, False) and \
-                    not self.aec_env.truncations.get(other, False):
-                        other_action = self.aec_env.action_space(other).sample()
-                        self.aec_env.step(other_action)
+                # Store our agent's suggestion
+                self._env.suggestions[agent_id] = action
 
-                return self.aec_env.observe(agent_id), reward, terminated, truncated, info
+                # Generate other agent's suggestion randomly
+                other = [
+                    a for a in self._env.possible_agents
+                    if a != agent_id
+                ][0]
+                self._env.suggestions[other] = \
+                    self._env.action_space(other).sample()
 
-        def render(self):
-            pass
+                # Execute portfolio step directly (bypass AEC turns)
+                self._env._execute_step()
+                self._env.timestep += 1
+                self._env.suggestions = {}
 
-        def close(self):
-            pass
+                reward     = self._env.rewards.get(agent_id, 0.0)
+                terminated = self._step_count >= self._max_steps
+                truncated  = False
+                info       = self._env.infos.get(agent_id, {})
+
+                if terminated:
+                    obs = np.zeros(
+                        self.observation_space.shape, dtype=np.float32
+                    )
+                else:
+                    obs = self._env.observe(agent_id)
+
+                return obs, reward, terminated, truncated, info
+
+            def render(self):
+                pass
+
+            def close(self):
+                pass
 
         def make():
             return Monitor(SingleAgentWrapper())
