@@ -1,3 +1,5 @@
+import time
+
 """
 Multi-seed evaluation script for trained MARL agents.
 Runs evaluation across multiple random seeds and reports
