@@ -26,10 +26,15 @@ def run_episode(env: StockTradingEnv,
                 config: dict = None) -> dict:
     """
     Run one full evaluation episode.
-    Returns episode summary metrics.
+    LLM coordinator called every 5 steps (weekly) not every step.
     """
     env.mode = "eval"
     obs, _   = env.reset(seed=seed)
+
+    # Cache last LLM decision — reuse for 5 steps (weekly cadence)
+    cached_llm_weights = None
+    llm_call_counter   = 0
+    LLM_FREQUENCY      = 5  # call LLM every 5 trading days (weekly)
 
     while env.agents:
         current = env.agent_selection
@@ -39,28 +44,32 @@ def run_episode(env: StockTradingEnv,
             env.step(None)
             continue
 
-        # Get both agent observations
-        price_obs = env.observe("price_agent")
-        sent_obs  = env.observe("sentiment_agent")
-
-        # Get both agent suggestions
+        # Get both agent observations and suggestions
+        price_obs    = env.observe("price_agent")
+        sent_obs     = env.observe("sentiment_agent")
         price_action = price_agent.predict(price_obs)
         sent_action  = sentiment_agent.predict(sent_obs)
 
         if use_llm and config is not None:
-            # Use LLM coordinator for final decision
-            context = {
-                "portfolio_value" : env.portfolio_value,
-                "initial_capital" : env.initial_capital,
-                "timestep"        : env.timestep,
-                "recent_returns"  : env.returns_history[-10:],
-            }
-            final_action = coordinate_or_average(
-                price_action, sent_action,
-                context, config, use_llm=True
-            )
+            # Only call Gemini every LLM_FREQUENCY steps
+            if llm_call_counter % LLM_FREQUENCY == 0:
+                context = {
+                    "portfolio_value": env.portfolio_value,
+                    "initial_capital": env.initial_capital,
+                    "timestep"       : env.timestep,
+                    "recent_returns" : env.returns_history[-10:],
+                }
+                cached_llm_weights = coordinate_or_average(
+                    price_action, sent_action,
+                    context, config, use_llm=True
+                )
+                time.sleep(1)
+            llm_call_counter += 1
+
+            # Use cached LLM weights if available
+            final_action = cached_llm_weights if cached_llm_weights is not None \
+                           else (price_action + sent_action) / 2.0
         else:
-            # Simple average (no coordinator)
             final_action = (price_action + sent_action) / 2.0
             final_action = final_action / (final_action.sum() + 1e-8)
 

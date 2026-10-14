@@ -41,6 +41,7 @@ coordinator:
   model: "gemini-3.8-flash"
   temperature: 0.2
   max_tokens: 2048
+  call_frequency: 5 # call LLM every N trading days (weekly cadence)
 
 training:
   total_timesteps: 2000000
