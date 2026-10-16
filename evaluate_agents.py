@@ -28,32 +28,38 @@ def run_episode(env: StockTradingEnv,
                 config: dict = None) -> dict:
     """
     Run one full evaluation episode.
-    LLM coordinator called every 5 steps (weekly) not every step.
+    Uses seed to sample different evaluation windows.
+    LLM coordinator called every 20 steps (monthly cadence).
     """
-    env.mode = "eval"
+    # Fix Bug 1: use seed to sample different start points
+    env.mode = "train"  # temporarily use train mode to allow random start
     obs, _   = env.reset(seed=seed)
+    env.mode = "eval"   # restore eval mode
 
-    # Cache last LLM decision — reuse for 5 steps (weekly cadence)
     cached_llm_weights = None
     llm_call_counter   = 0
-    LLM_FREQUENCY      = 5  # call LLM every 5 trading days (weekly)
+    LLM_FREQUENCY      = 20
 
-    while env.agents:
-        current = env.agent_selection
+    # Fix Bug 2: bypass AEC interface — directly control execution
+    for step in range(env.episode_length):
+        if not env.agents:
+            break
 
-        if env.terminations.get(current, False) or \
-           env.truncations.get(current, False):
-            env.step(None)
-            continue
+        # Get current date safely
+        date_idx = env.start_idx + env.timestep
+        if date_idx >= env.n_steps - 1:
+            break
 
-        # Get both agent observations and suggestions
-        price_obs    = env.observe("price_agent")
-        sent_obs     = env.observe("sentiment_agent")
+        # Get observations for both agents
+        price_obs = env.observe("price_agent")
+        sent_obs  = env.observe("sentiment_agent")
+
+        # Get both agent suggestions
         price_action = price_agent.predict(price_obs)
         sent_action  = sentiment_agent.predict(sent_obs)
 
         if use_llm and config is not None:
-            # Only call Gemini every LLM_FREQUENCY steps
+            # Call LLM every LLM_FREQUENCY steps
             if llm_call_counter % LLM_FREQUENCY == 0:
                 context = {
                     "portfolio_value": env.portfolio_value,
@@ -65,21 +71,38 @@ def run_episode(env: StockTradingEnv,
                     price_action, sent_action,
                     context, config, use_llm=True
                 )
-                time.sleep(1)
+                #time.sleep(1)
             llm_call_counter += 1
 
-            # Use cached LLM weights if available
-            final_action = cached_llm_weights if cached_llm_weights is not None \
-                           else (price_action + sent_action) / 2.0
+            final_weights = cached_llm_weights \
+                if cached_llm_weights is not None \
+                else (price_action + sent_action) / 2.0
         else:
-            final_action = (price_action + sent_action) / 2.0
-            final_action = final_action / (final_action.sum() + 1e-8)
+            final_weights = (price_action + sent_action) / 2.0
 
-        # Step current agent
-        if current == "price_agent":
-            env.step(price_action)
-        else:
-            env.step(sent_action)
+        # Normalise weights
+        final_weights = np.clip(final_weights, 0.0, 1.0)
+        final_weights = final_weights / (final_weights.sum() + 1e-8)
+
+        # Fix Bug 2: directly inject final weights into environment
+        # bypassing AEC turn structure so LLM decision is actually used
+        env.suggestions = {
+            "price_agent"    : price_action,
+            "sentiment_agent": sent_action,
+        }
+
+        # Override with LLM/averaged final decision
+        env.suggestions["price_agent"]     = final_weights
+        env.suggestions["sentiment_agent"] = final_weights
+
+        # Execute the step directly
+        env._execute_step()
+        env.timestep += 1
+        env.suggestions = {}
+
+        # Check termination
+        if env.terminations.get("price_agent", False):
+            break
 
     return env.get_episode_summary()
 
