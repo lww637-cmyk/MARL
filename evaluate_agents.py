@@ -16,6 +16,18 @@ from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.coordinator.llm_coordinator import coordinate_or_average
 
+# Global seed for full reproducibility
+GLOBAL_SEED = 42
+np.random.seed(GLOBAL_SEED)
+import random
+random.seed(GLOBAL_SEED)
+
+try:
+    import torch
+    torch.manual_seed(GLOBAL_SEED)
+except ImportError:
+    pass
+
 def load_config(path: str = "config.yaml") -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
@@ -31,10 +43,11 @@ def run_episode(env: StockTradingEnv,
     Uses seed to sample different evaluation windows.
     LLM coordinator called every 20 steps (monthly cadence).
     """
-    # Fix Bug 1: use seed to sample different start points
-    env.mode = "train"  # temporarily use train mode to allow random start
-    obs, _   = env.reset(seed=seed)
-    env.mode = "eval"   # restore eval mode
+    # Use seed to deterministically select different start windows
+    env.mode        = "train"
+    np.random.seed(GLOBAL_SEED + seed)  # fully controlled per seed
+    obs, _          = env.reset(seed=GLOBAL_SEED + seed)
+    env.mode        = "eval"
 
     cached_llm_weights = None
     llm_call_counter   = 0
