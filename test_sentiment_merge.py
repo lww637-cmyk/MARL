@@ -34,12 +34,22 @@ assert np.isclose(row["sentiment_score"], mon.mean())
 assert np.isclose(row["sentiment_std"], mon.std())
 assert merged.loc["2020-12-24", "headline_count"] == 1
 
-# Tuesday has no headlines: forward-filled values, flagged as not real
-assert merged.loc["2020-12-29", "has_sentiment"] == 0.0
+# Tuesday has no headlines: score/std carried forward, count is NOT, flagged as not real
+tue = merged.loc["2020-12-29"]
+assert tue["has_sentiment"] == 0.0
+assert np.isclose(tue["sentiment_score"], mon.mean())
+assert np.isclose(tue["sentiment_std"], mon.std())
+assert tue["headline_count"] == 0.0
+assert tue["headline_count_norm"] == 0.0
 
-# Normaliser uses the train-period max only: log1p(5) -> 1.0, test day exceeds 1
+# Normaliser uses the train-period max only: log1p(5) -> 1.0, Thursday log1p(1)/log1p(5)
 assert np.isclose(row["headline_count_norm"], 1.0)
-assert np.isclose(merged.loc["2022-07-01", "headline_count_norm"], np.log1p(20) / np.log1p(5))
+assert np.isclose(merged.loc["2020-12-24", "headline_count_norm"], np.log1p(1) / np.log1p(5))
+
+# Test day has more headlines than any train day: log1p(20)/log1p(5) > 1, clipped to 1
 assert pd.Timestamp("2022-07-01") > TRAIN_END
+assert np.log1p(20) / np.log1p(5) > 1.0
+assert merged.loc["2022-07-01", "headline_count_norm"] == 1.0
+assert merged["headline_count_norm"].between(0.0, 1.0).all()
 
 print("\nSentiment merge test passed.")

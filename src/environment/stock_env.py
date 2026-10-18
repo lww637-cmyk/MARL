@@ -119,9 +119,11 @@ def build_merged_dataset(price_data: dict,
     """
     Align price and sentiment data on the same daily index.
     Headlines on non-trading days are rolled forward to the next trading day.
-    Forward-fills missing sentiment days for at most SENTIMENT_FFILL_LIMIT
-    trading days, then fills with 0.0.
-    headline_count_norm = log1p(count) / max over the TRAIN period only.
+    Forward-fills sentiment score/std on missing days for at most
+    SENTIMENT_FFILL_LIMIT trading days, then fills with 0.0.
+    headline_count is 0 on days without headlines (never forward-filled).
+    headline_count_norm = log1p(count) / max over the TRAIN period only,
+    clipped to [0, 1].
     Adds has_sentiment flag (1 = real headlines that day, 0 = filled).
     Returns dict of {ticker: merged_dataframe}.
     """
@@ -143,19 +145,21 @@ def build_merged_dataset(price_data: dict,
 
             # Forward-fill sentiment scores for at most SENTIMENT_FFILL_LIMIT
             # trading days, then treat as no signal (0.0)
-            for col in ["sentiment_score", "sentiment_std", "headline_count"]:
+            for col in ["sentiment_score", "sentiment_std"]:
                 merged_df[col] = (
                     merged_df[col]
                     .ffill(limit=SENTIMENT_FFILL_LIMIT)
                     .fillna(0.0)
                 )
+            # Headline count is never carried forward: 0 on days without headlines
+            merged_df["headline_count"] = merged_df["headline_count"].fillna(0.0)
 
             # Normalise log headline count by the TRAIN-period maximum only
-            # (no test-period information; test values may exceed 1)
+            # (no test-period information), clipped to [0, 1]
             log_count = np.log1p(merged_df["headline_count"])
             max_log   = log_count[merged_df.index <= TRAIN_END].max()
             merged_df["headline_count_norm"] = (
-                log_count / max_log if max_log > 0 else 0.0
+                (log_count / max_log).clip(0.0, 1.0) if max_log > 0 else 0.0
             )
         else:
             # No sentiment data — fill with zeros
