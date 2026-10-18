@@ -3,6 +3,7 @@ results/checkpoints/
 data/raw/
 data/processed/
 data/sentiment/
+data/backup_old5/
 __pycache__/
 .env
 *.pyc
