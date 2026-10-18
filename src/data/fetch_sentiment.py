@@ -18,7 +18,7 @@ def load_config(path: str = "config.yaml") -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
-def load_news(filepath: str = "data/raw/news_filtered.csv",
+def load_news(filepath: str = "data/raw/news_headlines.csv",
               tickers: list = None) -> pd.DataFrame:
     """
     Load and filter news data efficiently.
@@ -58,18 +58,21 @@ def load_news(filepath: str = "data/raw/news_filtered.csv",
     return df
 
 def score_headlines(df: pd.DataFrame,
-                    batch_size: int = 32) -> pd.DataFrame:
+                    batch_size: int = 32,
+                    device=None) -> pd.DataFrame:
     """
     Score each headline using FinBERT.
     Returns df with added sentiment_score column.
     Positive = +confidence, Negative = -confidence, Neutral = 0.
+    device : None = transformers default (CPU), 0 = first GPU.
     """
     print("Loading FinBERT model...")
     finbert = pipeline(
         "sentiment-analysis",
         model="ProsusAI/finbert",
         truncation=True,
-        max_length=512
+        max_length=512,
+        device=device
     )
 
     headlines = df["article_title"].tolist()
@@ -125,7 +128,7 @@ def save_sentiment(aggregated: dict):
         df.to_csv(path)
         print(f"Saved {ticker} sentiment → {path} ({len(df)} trading days)")
 
-def score_and_save(config: dict):
+def score_and_save(config: dict, batch_size: int = 32, device=None):
     """Full pipeline: load → score → aggregate → save."""
     tickers = config["data"]["tickers"]
     start = config["data"]["start_date"]
@@ -139,7 +142,7 @@ def score_and_save(config: dict):
     print(f"\nAfter date filter: {len(df)} headlines")
 
     # Score with FinBERT
-    df = score_headlines(df)
+    df = score_headlines(df, batch_size=batch_size, device=device)
 
     # Aggregate to daily
     aggregated = aggregate_daily(df)
