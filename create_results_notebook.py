@@ -20,9 +20,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import warnings
+import yaml
 warnings.filterwarnings('ignore')
 
 os.chdir('C:/Users/User/MARL')
+
+with open('config.yaml') as f:
+    TICKERS = yaml.safe_load(f)['data']['tickers']
+TICKER_COLORS = dict(zip(TICKERS, ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']))
 
 plt.rcParams['figure.figsize']  = (12, 5)
 plt.rcParams['axes.grid']       = True
@@ -208,14 +213,8 @@ shap_df = shap_df[shap_df['mean_abs_shap'] > 0].head(15)
 
 fig, ax = plt.subplots(figsize=(10, 6))
 
-colors = []
-for feat in shap_df['feature']:
-    if 'NVDA' in feat:   colors.append('#d62728')
-    elif 'TSLA' in feat: colors.append('#9467bd')
-    elif 'AAPL' in feat: colors.append('#1f77b4')
-    elif 'MSFT' in feat: colors.append('#2ca02c')
-    elif 'AMZN' in feat: colors.append('#ff7f0e')
-    else:                colors.append('#8c8c8c')
+colors = [next((c for t, c in TICKER_COLORS.items() if feat.startswith(t + '_')), '#8c8c8c')
+          for feat in shap_df['feature']]
 
 ax.barh(range(len(shap_df)), shap_df['mean_abs_shap'].values[::-1],
         color=colors[::-1], alpha=0.85, edgecolor='white')
@@ -227,14 +226,8 @@ ax.set_title('RQ1: Sentiment Agent — Top Features by SHAP Importance\\n'
              fontsize=12, fontweight='bold')
 
 # Legend
-patches = [
-    mpatches.Patch(color='#d62728', label='NVDA'),
-    mpatches.Patch(color='#9467bd', label='TSLA'),
-    mpatches.Patch(color='#1f77b4', label='AAPL'),
-    mpatches.Patch(color='#2ca02c', label='MSFT'),
-    mpatches.Patch(color='#ff7f0e', label='AMZN'),
-    mpatches.Patch(color='#8c8c8c', label='Portfolio'),
-]
+patches = [mpatches.Patch(color=c, label=t) for t, c in TICKER_COLORS.items()]
+patches.append(mpatches.Patch(color='#8c8c8c', label='Portfolio'))
 ax.legend(handles=patches, loc='lower right', fontsize=9)
 ax.grid(axis='x', alpha=0.3)
 
@@ -243,14 +236,10 @@ plt.savefig('results/logs/rq1_shap_importance.png', dpi=150, bbox_inches='tight'
 plt.show()
 print('Saved → results/logs/rq1_shap_importance.png')
 
-print('\\nKey finding:')
-print('NVDA features dominate sentiment agent decisions.')
-print('has_sentiment (signal freshness) > sentiment_score (score value)')
-print('Agent learned to trust fresh signals over stale forward-filled scores.')"""),
+print('\\nTop feature:', shap_df.iloc[0]['feature'])"""),
 
     nbf.v4.new_markdown_cell("## 7. SHAP — Sentiment Importance by Ticker"),
     nbf.v4.new_code_cell("""shap_all = pd.read_csv('results/logs/shap/sentiment_agent_shap.csv')
-TICKERS  = ['AAPL', 'AMZN', 'MSFT', 'NVDA', 'TSLA']
 ticker_importance = {}
 
 for ticker in TICKERS:
@@ -258,7 +247,7 @@ for ticker in TICKERS:
     ticker_importance[ticker] = shap_all[mask]['mean_abs_shap'].sum()
 
 fig, ax = plt.subplots(figsize=(8, 5))
-colors  = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd']
+colors  = [TICKER_COLORS[t] for t in ticker_importance]
 bars    = ax.bar(ticker_importance.keys(),
                  ticker_importance.values(),
                  color=colors, alpha=0.85, edgecolor='white')
@@ -287,8 +276,8 @@ print('KEY FINDINGS SUMMARY')
 print('='*65)
 
 print('\\nRQ1: Does company-specific sentiment improve trading decisions?')
-print(f'  Sentiment agent SHAP: NVDA has_sentiment = top feature')
-print(f'  Agent learned signal freshness matters more than score value')
+top_feat = pd.read_csv('results/logs/shap/sentiment_agent_shap.csv').iloc[0]['feature']
+print(f'  Sentiment agent SHAP: {top_feat} = top feature')
 print(f'  MARL+LLM (with sentiment) achieves Sharpe {llm["mean_sharpe"]:.4f}')
 print(f'  vs buy-and-hold Sharpe {bah["mean_sharpe"]:.4f}')
 print(f'  → SUPPORTED: sentiment adds measurable value')
@@ -311,7 +300,6 @@ print(f'  → SUPPORTED: framework significantly outperforms buy-and-hold')
 
 print('\\nLimitations:')
 print('  - Price agent converged to uniform policy (technical indicators insufficient)')
-print('  - AMZN sentiment coverage only 16.1% — sparse signal')
 print('  - Evaluation window starts Q4 2018 (historically volatile period)')
 print('  - High variance across seeds reflects market regime sensitivity')
 print('  - Results are exploratory, not a universal trading solution')

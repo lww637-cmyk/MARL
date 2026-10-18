@@ -1,5 +1,5 @@
 """
-Cleans and preprocesses raw price data for AAPL, MSFT, NVDA, AMZN, TSLA.
+Cleans and preprocesses raw price data for the tickers in config.yaml.
 Computes technical indicators (RSI, MACD, Bollinger Bands) using the ta library.
 Saves processed data to data/processed/ as CSV files.
 """
@@ -111,7 +111,8 @@ if __name__ == "__main__":
     processed = process_all(config)
 
     print("\nPreprocessing complete.")
-    print("Columns per ticker:", list(processed["AAPL"].columns.tolist()))
+    first = config["data"]["tickers"][0]
+    print("Columns per ticker:", list(processed[first].columns.tolist()))
 
-    print("\nSample (AAPL first 3 rows):")
-    print(processed["AAPL"].head(3).to_string())
+    print(f"\nSample ({first} first 3 rows):")
+    print(processed[first].head(3).to_string())

@@ -1,5 +1,5 @@
 """
-Fetches historical stock price data for AAPL, AMZN, MSFT, NVDA, TSLA
+Fetches historical stock price data for the tickers in config.yaml
 from Yahoo Finance using yfinance.
 Saves raw data to data/raw/ as individual CSV files and one combined file.
 """

@@ -1,6 +1,8 @@
 import pandas as pd
+import yaml
 
-tickers = ['AAPL', 'AMZN', 'MSFT', 'NVDA', 'TSLA']
+with open('config.yaml') as f:
+    tickers = yaml.safe_load(f)['data']['tickers']
 
 print('=== PRICE DATA ===')
 for t in tickers:

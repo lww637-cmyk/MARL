@@ -4,7 +4,7 @@ nb = nbf.v4.new_notebook()
 
 cells = [
     nbf.v4.new_markdown_cell("""# 01 — Exploratory Data Analysis
-Explores price and sentiment data for AAPL, AMZN, MSFT, NVDA, TSLA (2018-2023).
+Explores price and sentiment data for the tickers in config.yaml (2018-2023).
 Run locally after Phase 1 data collection is complete."""),
 
     nbf.v4.new_markdown_cell("## Setup"),
@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import warnings
+import yaml
 warnings.filterwarnings('ignore')
 
 # Plot style
@@ -21,7 +22,8 @@ plt.rcParams['figure.figsize'] = (14, 5)
 plt.rcParams['axes.grid'] = True
 plt.rcParams['grid.alpha'] = 0.3
 
-TICKERS = ['AAPL', 'AMZN', 'MSFT', 'NVDA', 'TSLA']
+with open('../config.yaml') as f:
+    TICKERS = yaml.safe_load(f)['data']['tickers']
 COLORS  = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 print('Setup complete.')"""),
 
@@ -39,8 +41,8 @@ raw = filter_date_range(raw, config['data']['start_date'], config['data']['end_d
 ticker_data = split_by_ticker(raw)
 
 print('Tickers loaded:', list(ticker_data.keys()))
-print('\\nAAPL sample:')
-ticker_data['AAPL'].head()"""),
+print(f'\\n{TICKERS[0]} sample:')
+ticker_data[TICKERS[0]].head()"""),
 
     nbf.v4.new_markdown_cell("## 2. Basic Price Statistics"),
 
@@ -165,12 +167,12 @@ for ticker in TICKERS:
     processed[ticker] = pd.read_csv(path, parse_dates=['date'], index_col='date')
 
 print('Processed data loaded.')
-print('Columns:', list(processed['AAPL'].columns))
-processed['AAPL'].head(3)"""),
+print('Columns:', list(processed[TICKERS[0]].columns))
+processed[TICKERS[0]].head(3)"""),
 
-    nbf.v4.new_markdown_cell("## 8. Technical Indicators Overview (AAPL example)"),
+    nbf.v4.new_markdown_cell("## 8. Technical Indicators Overview (first ticker example)"),
 
-    nbf.v4.new_code_cell("""ticker = 'AAPL'
+    nbf.v4.new_code_cell("""ticker = TICKERS[0]
 df = processed[ticker].copy()
 
 fig, axes = plt.subplots(4, 1, figsize=(14, 14), sharex=True)
@@ -290,7 +292,7 @@ else:
     nbf.v4.new_markdown_cell("## 12. Sentiment Coverage — Missing Trading Days"),
 
     nbf.v4.new_code_cell("""if sentiment:
-    price_dates = ticker_data['AAPL'].index.normalize()
+    price_dates = ticker_data[TICKERS[0]].index.normalize()
 
     print(f'Total trading days in price data: {len(price_dates)}')
     print()

@@ -11,10 +11,9 @@ import numpy as np
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from src.environment.stock_env import TICKERS
 
 load_dotenv()
-
-TICKERS = ["AAPL", "AMZN", "MSFT", "NVDA", "TSLA"]
 
 # Configure Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -25,8 +24,8 @@ def build_prompt(price_suggestion: np.ndarray,
     """
     Format agent suggestions and market context into a prompt for Gemini.
 
-    price_suggestion      : array of 6 weights [AAPL,AMZN,MSFT,NVDA,TSLA,cash]
-    sentiment_suggestion  : array of 6 weights [AAPL,AMZN,MSFT,NVDA,TSLA,cash]
+    price_suggestion      : array of weights [*TICKERS, cash]
+    sentiment_suggestion  : array of weights [*TICKERS, cash]
     context               : dict with portfolio_value, timestep, returns_history
     """
     def format_weights(weights: np.ndarray) -> str:
@@ -41,6 +40,11 @@ def build_prompt(price_suggestion: np.ndarray,
     portfolio_return  = (portfolio_value - initial_capital) / initial_capital * 100
     timestep          = context.get("timestep", 0)
     recent_returns    = context.get("recent_returns", [])
+
+    equal_weight  = round(1.0 / len(TICKERS), 2)
+    json_template = ",\n".join(
+        [f'  "{t}": {equal_weight:.2f}' for t in TICKERS] + ['  "cash": 0.00']
+    )
 
     if len(recent_returns) >= 5:
         recent_perf = np.mean(recent_returns[-5:]) * 100
@@ -75,12 +79,7 @@ COORDINATION RULES:
 
 Respond ONLY with a valid JSON object in this exact format, no other text:
 {{
-  "AAPL": 0.20,
-  "AMZN": 0.20,
-  "MSFT": 0.20,
-  "NVDA": 0.20,
-  "TSLA": 0.20,
-  "cash": 0.00
+{json_template}
 }}"""
 
     return prompt
@@ -89,7 +88,7 @@ Respond ONLY with a valid JSON object in this exact format, no other text:
 def parse_response(response_text: str) -> np.ndarray:
     """
     Parse Gemini JSON response into portfolio weight array.
-    Returns weights in order: [AAPL, AMZN, MSFT, NVDA, TSLA, cash]
+    Returns weights in order: [*TICKERS, cash]
     Falls back to equal weights if parsing fails.
     """
     try:
@@ -102,14 +101,10 @@ def parse_response(response_text: str) -> np.ndarray:
 
         weights_dict = json.loads(text.strip())
 
-        weights = np.array([
-            float(weights_dict.get("AAPL", 0.0)),
-            float(weights_dict.get("AMZN", 0.0)),
-            float(weights_dict.get("MSFT", 0.0)),
-            float(weights_dict.get("NVDA", 0.0)),
-            float(weights_dict.get("TSLA", 0.0)),
-            float(weights_dict.get("cash", 0.0)),
-        ], dtype=np.float32)
+        weights = np.array(
+            [float(weights_dict.get(t, 0.0)) for t in TICKERS]
+            + [float(weights_dict.get("cash", 0.0))],
+            dtype=np.float32)
 
         # Normalise to sum to 1
         total = weights.sum()
@@ -122,7 +117,7 @@ def parse_response(response_text: str) -> np.ndarray:
         print(f"Warning: Failed to parse Gemini response: {e}")
         print(f"Response was: {response_text}")
         # Fall back to equal weights
-        return np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.0],
+        return np.array([1.0 / len(TICKERS)] * len(TICKERS) + [0.0],
                         dtype=np.float32)
 
 

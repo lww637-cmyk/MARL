@@ -2,6 +2,7 @@
 import numpy as np
 import yaml
 from src.coordinator.llm_coordinator import coordinate_or_average
+from src.environment.stock_env import TICKERS as ENV_TICKERS
 
 def load_config(path="config.yaml"):
     with open(path) as f:
@@ -24,7 +25,7 @@ context = {
     "recent_returns"   : [0.001, -0.002, 0.003, 0.001, -0.001],
 }
 
-TICKERS = ["AAPL", "AMZN", "MSFT", "NVDA", "TSLA", "cash"]
+TICKERS = ENV_TICKERS + ["cash"]
 
 print("Testing fallback (no LLM)...")
 fallback = coordinate_or_average(

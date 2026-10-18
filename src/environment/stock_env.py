@@ -1,5 +1,5 @@
 """
-Custom multi-agent trading environment for AAPL, AMZN, MSFT, NVDA, TSLA.
+Custom multi-agent trading environment for the tickers in config.yaml.
 Built on PettingZoo AEC API.
 Two agents share a portfolio: price agent and sentiment agent.
 LLM coordinator makes the final allocation decision each timestep.
@@ -14,7 +14,9 @@ import yaml
 import os
 
 # ── constants ────────────────────────────────────────────────────────────────
-TICKERS    = ["AAPL", "AMZN", "MSFT", "NVDA", "TSLA"]
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+with open(CONFIG_PATH, "r") as f:
+    TICKERS = yaml.safe_load(f)["data"]["tickers"]
 N_TICKERS  = len(TICKERS)
 
 # Price agent features per ticker
