@@ -41,6 +41,14 @@ SENTIMENT_OBS_SIZE = N_SENTIMENT_FEATURES * N_TICKERS + N_SHARED  # 20 + 7 = 27
 # Action = portfolio weights for 5 tickers + cash = 6 values
 ACTION_SIZE = N_TICKERS + 1
 
+# Chronological split (inclusive bounds)
+TRAIN_END  = pd.Timestamp("2022-06-30")
+TEST_START = pd.Timestamp("2022-07-01")
+SPLITS     = ("train", "test", "all")
+
+# Max trading days a sentiment value is carried forward after a real headline day
+SENTIMENT_FFILL_LIMIT = 5
+
 
 # ── data loader ──────────────────────────────────────────────────────────────
 
@@ -75,8 +83,9 @@ def build_merged_dataset(price_data: dict,
                           episode_length: int = 252) -> dict:
     """
     Align price and sentiment data on the same daily index.
-    Forward-fills missing sentiment days.
-    Adds has_sentiment flag (1 = fresh signal, 0 = forward-filled).
+    Forward-fills missing sentiment days for at most SENTIMENT_FFILL_LIMIT
+    trading days, then fills with 0.0.
+    Adds has_sentiment flag (1 = real headlines that day, 0 = filled).
     Returns dict of {ticker: merged_dataframe}.
     """
     merged = {}
@@ -94,16 +103,14 @@ def build_merged_dataset(price_data: dict,
             merged_df = price_df.join(sent_df, how="left")
             merged_df["has_sentiment"] = merged_df["has_sentiment"].fillna(0.0)
 
-            # Forward-fill sentiment scores
-            merged_df["sentiment_score"] = (
-                merged_df["sentiment_score"].ffill().fillna(0.0)
-            )
-            merged_df["sentiment_std"] = (
-                merged_df["sentiment_std"].ffill().fillna(0.0)
-            )
-            merged_df["headline_count"] = (
-                merged_df["headline_count"].ffill().fillna(0.0)
-            )
+            # Forward-fill sentiment scores for at most SENTIMENT_FFILL_LIMIT
+            # trading days, then treat as no signal (0.0)
+            for col in ["sentiment_score", "sentiment_std", "headline_count"]:
+                merged_df[col] = (
+                    merged_df[col]
+                    .ffill(limit=SENTIMENT_FFILL_LIMIT)
+                    .fillna(0.0)
+                )
 
             # Normalise headline count to 0-1
             max_count = merged_df["headline_count"].max()
@@ -141,11 +148,22 @@ class StockTradingEnv(AECEnv):
 
     metadata = {"render_modes": ["human"], "name": "stock_trading_v0"}
 
-    def __init__(self, config: dict, mode: str = "train"):
+    def __init__(self, config: dict, mode: str = "train",
+                 split: str = "train", full_period: bool = False):
+        """
+        mode        : "train" (random episode start) or "eval" (start at 0)
+        split       : "train" (<= TRAIN_END), "test" (>= TEST_START) or "all"
+        full_period : if True, one episode spans the whole split
+                      (overrides config episode_length)
+        """
         super().__init__()
+
+        if split not in SPLITS:
+            raise ValueError(f"split must be one of {SPLITS}, got {split!r}")
 
         self.config          = config
         self.mode            = mode   # "train" or "eval"
+        self.split           = split
         self.initial_capital = config["environment"]["initial_capital"]
         self.episode_length  = config["environment"]["episode_length"]
         self.transaction_cost = config["environment"]["transaction_cost"]
@@ -162,8 +180,23 @@ class StockTradingEnv(AECEnv):
         for ticker in TICKERS:
             dates = set(self.dataset[ticker].index)
             common_dates = dates if common_dates is None else common_dates & dates
-        self.common_dates = sorted(list(common_dates))
+        common_dates = sorted(list(common_dates))
+
+        # Restrict to the chronological split
+        if split == "train":
+            common_dates = [d for d in common_dates if d <= TRAIN_END]
+        elif split == "test":
+            common_dates = [d for d in common_dates if d >= TEST_START]
+        self.common_dates = common_dates
         self.n_steps      = len(self.common_dates)
+
+        if full_period:
+            self.episode_length = self.n_steps - 1
+        if self.n_steps <= self.episode_length:
+            raise ValueError(
+                f"{split} split has {self.n_steps} trading days, "
+                f"need > episode_length={self.episode_length}"
+            )
 
         # PettingZoo required attributes
         self.possible_agents = ["price_agent", "sentiment_agent"]
