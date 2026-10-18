@@ -6,6 +6,7 @@ Designed to run on Google Colab with GPU acceleration.
 
 import os
 import random
+import shutil
 import argparse
 import yaml
 import numpy as np
@@ -22,6 +23,15 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def mirror_file(path: str, copy_dir: str = None):
+    """Copy a saved file into copy_dir (e.g. Google Drive) if one is given."""
+    if copy_dir is None:
+        return
+    os.makedirs(copy_dir, exist_ok=True)
+    shutil.copy(path, copy_dir)
+    print(f"Copied {path} → {copy_dir}/")
+
+
 # ── custom callback ──────────────────────────────────────────────────────────
 
 class TrainingCallback(BaseCallback):
@@ -32,12 +42,14 @@ class TrainingCallback(BaseCallback):
 
     def __init__(self, agent_id: str, config: dict,
                  save_freq: int = 50000, verbose: int = 0,
-                 ckpt_dir: str = "results/checkpoints"):
+                 ckpt_dir: str = "results/checkpoints",
+                 copy_dir: str = None):
         super().__init__(verbose)
         self.agent_id  = agent_id
         self.config    = config
         self.save_freq = save_freq
         self.ckpt_dir  = ckpt_dir
+        self.copy_dir  = copy_dir
         self.episode_rewards = []
         self.episode_count   = 0
 
@@ -61,6 +73,7 @@ class TrainingCallback(BaseCallback):
             path = f"{self.ckpt_dir}/{self.agent_id}_step{self.n_calls}"
             self.model.save(path)
             print(f"Checkpoint saved: {path}")
+            mirror_file(f"{path}.zip", self.copy_dir)
 
         return True
 
@@ -129,7 +142,7 @@ def set_global_seed(seed: int):
         pass
 
 
-def train(config: dict, seed: int = None):
+def train(config: dict, seed: int = None, copy_dir: str = None):
     """
     Full training pipeline:
     1. Initialise environment and agents (train split only)
@@ -140,6 +153,8 @@ def train(config: dict, seed: int = None):
 
     seed : optional training seed. When given, all RNGs and PPO are seeded
            and checkpoints go to results/checkpoints/seed{seed}/.
+    copy_dir : optional folder (e.g. on Google Drive) that every checkpoint
+               and final model is copied to as soon as it is saved.
     """
     total_timesteps = config["training"]["total_timesteps"]
     eval_freq       = config["training"]["eval_frequency"]
@@ -179,7 +194,8 @@ def train(config: dict, seed: int = None):
 
         price_agent = PriceAgent(env, config)
         price_callback = TrainingCallback(
-            "price_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir
+            "price_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir,
+            copy_dir=copy_dir
         )
 
         price_agent.model.learn(
@@ -189,6 +205,7 @@ def train(config: dict, seed: int = None):
         )
 
         price_agent.save(f"{ckpt_dir}/price_agent_final.zip")
+        mirror_file(f"{ckpt_dir}/price_agent_final.zip", copy_dir)
         print("Price agent training complete.")
 
         # Evaluate price agent
@@ -211,7 +228,8 @@ def train(config: dict, seed: int = None):
 
         sentiment_agent = SentimentAgent(env, config)
         sentiment_callback = TrainingCallback(
-            "sentiment_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir
+            "sentiment_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir,
+            copy_dir=copy_dir
         )
 
         sentiment_agent.model.learn(
@@ -221,6 +239,7 @@ def train(config: dict, seed: int = None):
         )
 
         sentiment_agent.save(f"{ckpt_dir}/sentiment_agent_final.zip")
+        mirror_file(f"{ckpt_dir}/sentiment_agent_final.zip", copy_dir)
         print("Sentiment agent training complete.")
 
         # Evaluate sentiment agent
@@ -250,7 +269,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train price and sentiment agents")
     parser.add_argument("--seed", type=int, default=None,
                         help="training seed; checkpoints go to results/checkpoints/seed{N}/")
+    parser.add_argument("--copy-dir", type=str, default=None,
+                        help="also copy every checkpoint here (e.g. a Google Drive folder)")
     args = parser.parse_args()
 
     config = load_config()
-    price_agent, sentiment_agent = train(config, seed=args.seed)
+    price_agent, sentiment_agent = train(config, seed=args.seed,
+                                         copy_dir=args.copy_dir)
