@@ -5,6 +5,7 @@ Designed to run on Google Colab with GPU acceleration.
 """
 
 import os
+import re
 import random
 import shutil
 import argparse
@@ -12,6 +13,7 @@ import yaml
 import numpy as np
 import mlflow
 import mlflow.pytorch
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from src.environment.stock_env import StockTradingEnv
 from src.agents.price_agent import PriceAgent
@@ -28,8 +30,73 @@ def mirror_file(path: str, copy_dir: str = None):
     if copy_dir is None:
         return
     os.makedirs(copy_dir, exist_ok=True)
-    shutil.copy(path, copy_dir)
+    # copy under a temporary name first so a disconnect never leaves a
+    # half-written checkpoint under the real name
+    dst = os.path.join(copy_dir, os.path.basename(path))
+    shutil.copy(path, dst + ".tmp")
+    os.replace(dst + ".tmp", dst)
     print(f"Copied {path} → {copy_dir}/")
+
+
+def find_checkpoints(agent_id: str, dirs: list,
+                     total_timesteps: int) -> list:
+    """
+    Checkpoints for agent_id in dirs, newest first, as (step, path).
+    {agent_id}_final.zip counts as step total_timesteps.
+    """
+    pattern = re.compile(rf"^{agent_id}_step(\d+)\.zip$")
+    found = {}
+    for d in dirs:
+        if d is None or not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            m = pattern.match(name)
+            if m:
+                step = int(m.group(1))
+            elif name == f"{agent_id}_final.zip":
+                step = total_timesteps
+            else:
+                continue
+            found.setdefault(step, os.path.join(d, name))
+    return sorted(found.items(), reverse=True)
+
+
+def load_latest_checkpoint(agent, dirs: list, total_timesteps: int) -> int:
+    """
+    Replace agent.model with the newest loadable checkpoint in dirs
+    (unreadable files are skipped). Returns the step resumed from, 0 if none.
+    """
+    for step, path in find_checkpoints(agent.agent_id, dirs, total_timesteps):
+        try:
+            model = PPO.load(path, env=agent.model.get_env(), device="cpu")
+        except Exception as e:
+            print(f"WARNING: could not load {path} ({e}); trying an older checkpoint")
+            continue
+        agent.model = model
+        print(f"Resuming {agent.agent_id} from step {model.num_timesteps:,} ({path})")
+        return model.num_timesteps
+    print(f"No checkpoint for {agent.agent_id} — training from step 0")
+    return 0
+
+
+def learn_with_resume(agent, total_timesteps: int, callback,
+                      dirs: list) -> int:
+    """
+    Train agent up to total_timesteps, continuing from the newest checkpoint
+    in dirs if there is one. Returns the step it resumed from.
+    """
+    start = load_latest_checkpoint(agent, dirs, total_timesteps)
+    remaining = total_timesteps - start
+    if remaining <= 0:
+        print(f"{agent.agent_id} already trained to {start:,} steps — skipping")
+        return start
+    agent.model.learn(
+        total_timesteps     = remaining,
+        callback            = callback,
+        progress_bar        = True,
+        reset_num_timesteps = (start == 0),
+    )
+    return start
 
 
 # ── custom callback ──────────────────────────────────────────────────────────
@@ -58,19 +125,20 @@ class TrainingCallback(BaseCallback):
         reward = self.locals.get("rewards", [0])[0]
         self.episode_rewards.append(reward)
 
-        # Log to MLflow every 1000 steps
-        if self.n_calls % 1000 == 0 and len(self.episode_rewards) > 0:
+        # Log to MLflow every 1000 steps. Uses the model's total step count
+        # (not n_calls) so steps stay correct after resuming from a checkpoint.
+        if self.num_timesteps % 1000 == 0 and len(self.episode_rewards) > 0:
             mean_reward = np.mean(self.episode_rewards[-100:])
             mlflow.log_metric(
                 f"{self.agent_id}_mean_reward",
                 mean_reward,
-                step=self.n_calls
+                step=self.num_timesteps
             )
 
         # Save checkpoint
-        if self.n_calls % self.save_freq == 0:
+        if self.num_timesteps % self.save_freq == 0:
             os.makedirs(self.ckpt_dir, exist_ok=True)
-            path = f"{self.ckpt_dir}/{self.agent_id}_step{self.n_calls}"
+            path = f"{self.ckpt_dir}/{self.agent_id}_step{self.num_timesteps}"
             self.model.save(path)
             print(f"Checkpoint saved: {path}")
             mirror_file(f"{path}.zip", self.copy_dir)
@@ -155,6 +223,8 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
            and checkpoints go to results/checkpoints/seed{seed}/.
     copy_dir : optional folder (e.g. on Google Drive) that every checkpoint
                and final model is copied to as soon as it is saved.
+               If it (or the local checkpoint dir) already holds checkpoints
+               for an agent, training resumes from the newest one.
     """
     total_timesteps = config["training"]["total_timesteps"]
     eval_freq       = config["training"]["eval_frequency"]
@@ -165,6 +235,8 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
         set_global_seed(seed)
         config["training"]["seed"] = seed   # read by BaseTrader -> PPO(seed=...)
     ckpt_dir = checkpoint_dir(seed)
+    # Resume from the newest checkpoint for this seed (Drive copy first)
+    resume_dirs = [copy_dir, ckpt_dir]
 
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs("results/logs", exist_ok=True)
@@ -198,11 +270,10 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
             copy_dir=copy_dir
         )
 
-        price_agent.model.learn(
-            total_timesteps = total_timesteps,
-            callback        = price_callback,
-            progress_bar    = True,
+        price_start = learn_with_resume(
+            price_agent, total_timesteps, price_callback, resume_dirs
         )
+        mlflow.log_param("price_resumed_from_step", price_start)
 
         price_agent.save(f"{ckpt_dir}/price_agent_final.zip")
         mirror_file(f"{ckpt_dir}/price_agent_final.zip", copy_dir)
@@ -232,11 +303,10 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
             copy_dir=copy_dir
         )
 
-        sentiment_agent.model.learn(
-            total_timesteps = total_timesteps,
-            callback        = sentiment_callback,
-            progress_bar    = True,
+        sentiment_start = learn_with_resume(
+            sentiment_agent, total_timesteps, sentiment_callback, resume_dirs
         )
+        mlflow.log_param("sentiment_resumed_from_step", sentiment_start)
 
         sentiment_agent.save(f"{ckpt_dir}/sentiment_agent_final.zip")
         mirror_file(f"{ckpt_dir}/sentiment_agent_final.zip", copy_dir)

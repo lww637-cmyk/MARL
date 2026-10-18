@@ -34,10 +34,12 @@ Train seed 0 first, run the policy check at the end, and stop. Change `SEED` and
     nbf.v4.new_markdown_cell("## Step 5 — Validate environment (train split)"),
     nbf.v4.new_code_cell('from src.environment.stock_env import StockTradingEnv\n\nenv = StockTradingEnv(config, mode="train", split="train")\nprint(f"Train split: {env.n_steps} trading days "\n      f"({env.common_dates[0].date()} .. {env.common_dates[-1].date()})")\nprint("Price obs:", env.observation_space("price_agent").shape,\n      "| Sentiment obs:", env.observation_space("sentiment_agent").shape)\n\nfor t in TICKERS:\n    d = env.dataset[t].loc[env.common_dates]\n    print(f"  {t}: has_sentiment on {d.has_sentiment.mean()*100:.1f}% of train days")\n    assert d.has_sentiment.mean() > 0, f"{t} has no sentiment in the train split"'),
 
-    nbf.v4.new_markdown_cell("## Step 6 — Train one seed\nEvery checkpoint is copied to Drive as soon as it is saved. "
-                             "If Colab disconnects, finished checkpoints are already in "
-                             "`MyDrive/MARL/results/checkpoints/seed{SEED}/`."),
-    nbf.v4.new_code_cell('from src.training.train_marl import train\n\nDRIVE_CKPT = f"{DRIVE}/results/checkpoints/seed{SEED}"\nprice_agent, sentiment_agent = train(config, seed=SEED, copy_dir=DRIVE_CKPT)\nprint("Training complete. Checkpoints on Drive:")\nprint(sorted(os.listdir(DRIVE_CKPT)))'),
+    nbf.v4.new_markdown_cell("## Step 6 — Train one seed (resumes automatically)\nEvery checkpoint is copied to Drive as soon as it is saved. "
+                             "If Colab disconnects, re-run the notebook from the top: each agent continues from "
+                             "its newest checkpoint in `MyDrive/MARL/results/checkpoints/seed{SEED}/`, "
+                             "and an agent with a `_final.zip` there is skipped."),
+    nbf.v4.new_code_cell('from src.training.train_marl import find_checkpoints\n\nDRIVE_CKPT = f"{DRIVE}/results/checkpoints/seed{SEED}"\nTOTAL      = config["training"]["total_timesteps"]\n\nfor agent_id in ["price_agent", "sentiment_agent"]:\n    found = find_checkpoints(agent_id, [DRIVE_CKPT], TOTAL)\n    if found:\n        step, path = found[0]\n        print(f"{agent_id}: will resume from step {step:,} of {TOTAL:,} ({os.path.basename(path)})")\n    else:\n        print(f"{agent_id}: no checkpoint on Drive — starts from step 0")'),
+    nbf.v4.new_code_cell('from src.training.train_marl import train\n\nprice_agent, sentiment_agent = train(config, seed=SEED, copy_dir=DRIVE_CKPT)\nprint("Training complete. Checkpoints on Drive:")\nprint(sorted(os.listdir(DRIVE_CKPT)))'),
 
     nbf.v4.new_markdown_cell("## Step 7 — Policy check (train split only), then STOP\n"
                              "Deterministic actions of each final model on every train-split day. "
