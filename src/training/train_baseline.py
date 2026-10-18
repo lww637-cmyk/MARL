@@ -27,7 +27,7 @@ def buy_and_hold(config: dict) -> pd.DataFrame:
     Returns daily portfolio value series.
     """
     print("Running buy-and-hold baseline...")
-    env = StockTradingEnv(config, mode="eval")
+    env = StockTradingEnv(config, mode="eval", split="test", full_period=True)
     obs, _ = env.reset(seed=0)
 
     # Equal weights across 5 tickers, no cash
@@ -72,7 +72,7 @@ def marl_no_coordinator(config: dict,
     Returns daily portfolio value series.
     """
     print("\nRunning MARL-no-coordinator baseline...")
-    env = StockTradingEnv(config, mode="eval")
+    env = StockTradingEnv(config, mode="eval", split="test", full_period=True)
 
     price_agent     = PriceAgent(env, config)
     sentiment_agent = SentimentAgent(env, config)

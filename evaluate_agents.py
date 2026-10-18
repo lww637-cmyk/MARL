@@ -1,12 +1,24 @@
 import time
 
 """
-Multi-seed evaluation script for trained MARL agents.
-Runs evaluation across multiple random seeds and reports
-mean, std, min and max for all metrics.
+Evaluation script for trained MARL agents. Test split only (>= 2022-07-01).
+
+Primary evaluation:
+    ONE fixed episode covering the full test period, identical for
+    buy-and-hold, MARL-no-coordinator and MARL+LLM. Run once per
+    training seed (results/checkpoints/seed{N}/) to report variance
+    across training seeds.
+
+Secondary robustness check (--robustness):
+    Random-start windows of config episode_length inside the test split.
+    All strategies use exactly the same windows (same seeds). The test split
+    is short, so these windows OVERLAP heavily and are NOT independent
+    samples — do not treat their spread as a confidence interval.
+
 Run this after downloading checkpoints from Colab.
 """
 
+import argparse
 import numpy as np
 import pandas as pd
 import yaml
@@ -28,26 +40,81 @@ try:
 except ImportError:
     pass
 
+BAH_WEIGHTS = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.0], dtype=np.float32)
+ROBUSTNESS_NOTE = "overlapping windows, not independent"
+
+
 def load_config(path: str = "config.yaml") -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
 
-def run_episode(env: StockTradingEnv,
-                price_agent: PriceAgent,
-                sentiment_agent: SentimentAgent,
-                seed: int,
-                use_llm: bool = False,
-                config: dict = None) -> dict:
+
+def checkpoint_paths(train_seed: int = None) -> tuple:
+    """Checkpoint paths for a training seed (None = unseeded legacy run)."""
+    ckpt_dir = "results/checkpoints" if train_seed is None \
+        else f"results/checkpoints/seed{train_seed}"
+    return (f"{ckpt_dir}/price_agent_final.zip",
+            f"{ckpt_dir}/sentiment_agent_final.zip")
+
+
+def make_test_env(config: dict, full_period: bool) -> StockTradingEnv:
+    """Evaluation env restricted to the test split."""
+    return StockTradingEnv(config, mode="eval", split="test",
+                           full_period=full_period)
+
+
+def load_agents(env: StockTradingEnv, config: dict,
+                price_ckpt: str, sentiment_ckpt: str) -> tuple:
+    price_agent     = PriceAgent(env, config)
+    sentiment_agent = SentimentAgent(env, config)
+
+    if os.path.exists(price_ckpt):
+        price_agent.load(price_ckpt)
+        print(f"Loaded price agent from {price_ckpt}")
+    else:
+        print(f"WARNING: {price_ckpt} not found — using untrained model")
+
+    if os.path.exists(sentiment_ckpt):
+        sentiment_agent.load(sentiment_ckpt)
+        print(f"Loaded sentiment agent from {sentiment_ckpt}")
+    else:
+        print(f"WARNING: {sentiment_ckpt} not found — using untrained model")
+
+    return price_agent, sentiment_agent
+
+
+def reset_window(env: StockTradingEnv, window_seed: int = None):
     """
-    Run one full evaluation episode.
-    Uses seed to sample different evaluation windows.
+    Reset env to an evaluation window. Shared by every strategy so
+    windows are identical across strategies.
+    window_seed=None -> start of the test split (fixed full-period episode).
+    window_seed=int  -> deterministic random start inside the test split.
+    """
+    if window_seed is None:
+        env.mode = "eval"
+        env.reset()
+        return
+
+    env.mode = "train"
+    np.random.seed(GLOBAL_SEED + window_seed)  # fully controlled per seed
+    env.reset(seed=GLOBAL_SEED + window_seed)
+    env.mode = "eval"
+
+
+def run_episode(env: StockTradingEnv,
+                price_agent: PriceAgent = None,
+                sentiment_agent: SentimentAgent = None,
+                window_seed: int = None,
+                use_llm: bool = False,
+                config: dict = None,
+                fixed_weights: np.ndarray = None) -> dict:
+    """
+    Run one evaluation episode on the window selected by reset_window().
+    fixed_weights : if given, ignore agents and hold these target weights
+                    every step (used for buy-and-hold).
     LLM coordinator called every 20 steps (monthly cadence).
     """
-    # Use seed to deterministically select different start windows
-    env.mode        = "train"
-    np.random.seed(GLOBAL_SEED + seed)  # fully controlled per seed
-    obs, _          = env.reset(seed=GLOBAL_SEED + seed)
-    env.mode        = "eval"
+    reset_window(env, window_seed)
 
     cached_llm_weights = None
     llm_call_counter   = 0
@@ -63,35 +130,38 @@ def run_episode(env: StockTradingEnv,
         if date_idx >= env.n_steps - 1:
             break
 
-        # Get observations for both agents
-        price_obs = env.observe("price_agent")
-        sent_obs  = env.observe("sentiment_agent")
-
-        # Get both agent suggestions
-        price_action = price_agent.predict(price_obs)
-        sent_action  = sentiment_agent.predict(sent_obs)
-
-        if use_llm and config is not None:
-            # Call LLM every LLM_FREQUENCY steps
-            if llm_call_counter % LLM_FREQUENCY == 0:
-                context = {
-                    "portfolio_value": env.portfolio_value,
-                    "initial_capital": env.initial_capital,
-                    "timestep"       : env.timestep,
-                    "recent_returns" : env.returns_history[-10:],
-                }
-                cached_llm_weights = coordinate_or_average(
-                    price_action, sent_action,
-                    context, config, use_llm=True
-                )
-                #time.sleep(1)
-            llm_call_counter += 1
-
-            final_weights = cached_llm_weights \
-                if cached_llm_weights is not None \
-                else (price_action + sent_action) / 2.0
+        if fixed_weights is not None:
+            price_action = sent_action = final_weights = fixed_weights
         else:
-            final_weights = (price_action + sent_action) / 2.0
+            # Get observations for both agents
+            price_obs = env.observe("price_agent")
+            sent_obs  = env.observe("sentiment_agent")
+
+            # Get both agent suggestions
+            price_action = price_agent.predict(price_obs)
+            sent_action  = sentiment_agent.predict(sent_obs)
+
+            if use_llm and config is not None:
+                # Call LLM every LLM_FREQUENCY steps
+                if llm_call_counter % LLM_FREQUENCY == 0:
+                    context = {
+                        "portfolio_value": env.portfolio_value,
+                        "initial_capital": env.initial_capital,
+                        "timestep"       : env.timestep,
+                        "recent_returns" : env.returns_history[-10:],
+                    }
+                    cached_llm_weights = coordinate_or_average(
+                        price_action, sent_action,
+                        context, config, use_llm=True
+                    )
+                    #time.sleep(1)
+                llm_call_counter += 1
+
+                final_weights = cached_llm_weights \
+                    if cached_llm_weights is not None \
+                    else (price_action + sent_action) / 2.0
+            else:
+                final_weights = (price_action + sent_action) / 2.0
 
         # Normalise weights
         final_weights = np.clip(final_weights, 0.0, 1.0)
@@ -100,13 +170,9 @@ def run_episode(env: StockTradingEnv,
         # Fix Bug 2: directly inject final weights into environment
         # bypassing AEC turn structure so LLM decision is actually used
         env.suggestions = {
-            "price_agent"    : price_action,
-            "sentiment_agent": sent_action,
+            "price_agent"    : final_weights,
+            "sentiment_agent": final_weights,
         }
-
-        # Override with LLM/averaged final decision
-        env.suggestions["price_agent"]     = final_weights
-        env.suggestions["sentiment_agent"] = final_weights
 
         # Execute the step directly
         env._execute_step()
@@ -117,8 +183,60 @@ def run_episode(env: StockTradingEnv,
         if env.terminations.get("price_agent", False):
             break
 
-    return env.get_episode_summary()
+    summary = env.get_episode_summary()
+    summary["start_date"] = str(env.common_dates[env.start_idx].date())
+    summary["end_date"]   = str(env.common_dates[env.start_idx + env.timestep].date())
+    return summary
 
+
+def _print_row(prefix: str, summary: dict):
+    print(f"  {prefix} | "
+          f"{summary['start_date']} → {summary['end_date']} | "
+          f"Return: {summary['total_return']*100:6.2f}% | "
+          f"Sharpe: {summary['sharpe_ratio']:7.4f} | "
+          f"Drawdown: {summary['max_drawdown']*100:5.2f}%")
+
+
+# ── primary: one fixed full-test-period episode ──────────────────────────────
+
+def evaluate_test_period(config: dict,
+                         train_seeds: list = None) -> pd.DataFrame:
+    """
+    One full-test-period episode per strategy, same window for all.
+    MARL strategies are repeated per training seed; buy-and-hold is
+    deterministic so it runs once.
+    """
+    if train_seeds is None:
+        train_seeds = [None]
+
+    env = make_test_env(config, full_period=True)
+    print(f"\nFixed test-period episode: "
+          f"{env.common_dates[0].date()} → {env.common_dates[-1].date()} "
+          f"({env.n_steps} trading days)")
+
+    rows = []
+    summary = run_episode(env, fixed_weights=BAH_WEIGHTS)
+    summary.update(strategy="buy_and_hold", train_seed=None)
+    rows.append(summary)
+    _print_row(f"{'buy_and_hold':20s}", summary)
+
+    for train_seed in train_seeds:
+        price_ckpt, sentiment_ckpt = checkpoint_paths(train_seed)
+        price_agent, sentiment_agent = load_agents(
+            env, config, price_ckpt, sentiment_ckpt
+        )
+        for use_llm in (False, True):
+            label   = "MARL+LLM" if use_llm else "MARL-no-coordinator"
+            summary = run_episode(env, price_agent, sentiment_agent,
+                                  use_llm=use_llm, config=config)
+            summary.update(strategy=label, train_seed=train_seed)
+            rows.append(summary)
+            _print_row(f"{label:20s} train_seed={train_seed}", summary)
+
+    return pd.DataFrame(rows)
+
+
+# ── secondary: random-start windows (overlapping, not independent) ──────────
 
 def evaluate_multi_seed(price_ckpt: str,
                         sentiment_ckpt: str,
@@ -126,97 +244,71 @@ def evaluate_multi_seed(price_ckpt: str,
                         seeds: list = None,
                         use_llm: bool = False) -> pd.DataFrame:
     """
-    Evaluate trained agents across multiple seeds.
-    Returns dataframe with results per seed.
+    Evaluate trained agents on random-start test windows.
+    Windows overlap heavily — robustness check only.
     """
     if seeds is None:
         seeds = list(range(10))
 
-    # Initialise environment and agents
-    env = StockTradingEnv(config, mode="eval")
-
-    price_agent     = PriceAgent(env, config)
-    sentiment_agent = SentimentAgent(env, config)
-
-    # Load checkpoints
-    if os.path.exists(price_ckpt):
-        price_agent.load(price_ckpt)
-        print(f"Loaded price agent from {price_ckpt}")
-    else:
-        print(f"WARNING: {price_ckpt} not found — using untrained model")
-
-    if os.path.exists(sentiment_ckpt):
-        sentiment_agent.load(sentiment_ckpt)
-        print(f"Loaded sentiment agent from {sentiment_ckpt}")
-    else:
-        print(f"WARNING: {sentiment_ckpt} not found — using untrained model")
+    env = make_test_env(config, full_period=False)
+    price_agent, sentiment_agent = load_agents(
+        env, config, price_ckpt, sentiment_ckpt
+    )
 
     label = "MARL+LLM" if use_llm else "MARL-no-coordinator"
-    print(f"\nEvaluating {label} across {len(seeds)} seeds...")
+    print(f"\nEvaluating {label} across {len(seeds)} windows "
+          f"({ROBUSTNESS_NOTE})...")
 
     rows = []
     for seed in seeds:
         summary = run_episode(
             env, price_agent, sentiment_agent,
-            seed=seed, use_llm=use_llm, config=config
+            window_seed=seed, use_llm=use_llm, config=config
         )
         summary["seed"]     = seed
         summary["strategy"] = label
         rows.append(summary)
-        print(f"  Seed {seed:2d} | "
-              f"Return: {summary['total_return']*100:6.2f}% | "
-              f"Sharpe: {summary['sharpe_ratio']:7.4f} | "
-              f"Drawdown: {summary['max_drawdown']*100:5.2f}%")
+        _print_row(f"Seed {seed:2d}", summary)
 
     return pd.DataFrame(rows)
 
 
 def buy_and_hold_multi_seed(config: dict,
                              seeds: list = None) -> pd.DataFrame:
-    """Buy-and-hold baseline across multiple seeds."""
+    """
+    Buy-and-hold baseline on exactly the same windows as
+    evaluate_multi_seed (same seeds, episode length, test split).
+    """
     if seeds is None:
         seeds = list(range(10))
 
-    print(f"\nEvaluating buy-and-hold across {len(seeds)} seeds...")
-    env     = StockTradingEnv(config, mode="eval")
-    weights = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.0], dtype=np.float32)
+    print(f"\nEvaluating buy-and-hold across {len(seeds)} windows "
+          f"({ROBUSTNESS_NOTE})...")
+    env = make_test_env(config, full_period=False)
 
     rows = []
     for seed in seeds:
-        env.mode = "eval"
-        obs, _   = env.reset(seed=seed)
-
-        while env.agents:
-            current = env.agent_selection
-            if env.terminations.get(current, False) or \
-               env.truncations.get(current, False):
-                env.step(None)
-                continue
-            env.step(weights)
-
-        summary             = env.get_episode_summary()
+        summary = run_episode(env, window_seed=seed,
+                              fixed_weights=BAH_WEIGHTS)
         summary["seed"]     = seed
         summary["strategy"] = "buy_and_hold"
         rows.append(summary)
-        print(f"  Seed {seed:2d} | "
-              f"Return: {summary['total_return']*100:6.2f}% | "
-              f"Sharpe: {summary['sharpe_ratio']:7.4f} | "
-              f"Drawdown: {summary['max_drawdown']*100:5.2f}%")
+        _print_row(f"Seed {seed:2d}", summary)
 
     return pd.DataFrame(rows)
 
 
-def print_summary(df: pd.DataFrame):
+def print_summary(df: pd.DataFrame, title: str):
     """Print mean, std, min, max per strategy."""
     print("\n" + "="*65)
-    print("MULTI-SEED EVALUATION SUMMARY")
+    print(title)
     print("="*65)
 
     metrics = ["total_return", "sharpe_ratio", "max_drawdown"]
 
     for strategy in df["strategy"].unique():
         subset = df[df["strategy"] == strategy]
-        print(f"\n{strategy}:")
+        print(f"\n{strategy} (n={len(subset)}):")
         for metric in metrics:
             vals = subset[metric]
             print(f"  {metric:20s} | "
@@ -226,47 +318,13 @@ def print_summary(df: pd.DataFrame):
                   f"max={vals.max():7.4f}")
 
 
-def run_full_evaluation(config: dict,
-                        price_ckpt: str,
-                        sentiment_ckpt: str,
-                        seeds: list = None):
-    """
-    Run complete evaluation:
-    1. Buy-and-hold baseline
-    2. MARL without coordinator
-    3. MARL with LLM coordinator
-    Save results to results/logs/
-    """
-    if seeds is None:
-        seeds = list(range(10))
-
-    os.makedirs("results/logs", exist_ok=True)
-
-    # Run all three strategies
-    bah_df  = buy_and_hold_multi_seed(config, seeds)
-    marl_df = evaluate_multi_seed(
-        price_ckpt, sentiment_ckpt, config,
-        seeds=seeds, use_llm=False
-    )
-    llm_df  = evaluate_multi_seed(
-        price_ckpt, sentiment_ckpt, config,
-        seeds=seeds, use_llm=True
-    )
-
-    # Combine
-    all_results = pd.concat([bah_df, marl_df, llm_df], ignore_index=True)
-    all_results.to_csv("results/logs/multi_seed_results.csv", index=False)
-    print("\nSaved → results/logs/multi_seed_results.csv")
-
-    # Summary table
-    print_summary(all_results)
-
-    # Save summary
+def summarise(df: pd.DataFrame) -> pd.DataFrame:
     summary_rows = []
-    for strategy in all_results["strategy"].unique():
-        subset = all_results[all_results["strategy"] == strategy]
+    for strategy in df["strategy"].unique():
+        subset = df[df["strategy"] == strategy]
         summary_rows.append({
             "strategy"          : strategy,
+            "n"                 : len(subset),
             "mean_return"       : subset["total_return"].mean(),
             "std_return"        : subset["total_return"].std(),
             "mean_sharpe"       : subset["sharpe_ratio"].mean(),
@@ -275,26 +333,85 @@ def run_full_evaluation(config: dict,
             "std_drawdown"      : subset["max_drawdown"].std(),
             "mean_final_value"  : subset["final_value"].mean(),
         })
+    return pd.DataFrame(summary_rows)
 
-    summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv("results/logs/multi_seed_summary.csv", index=False)
-    print("Saved → results/logs/multi_seed_summary.csv")
+
+def run_full_evaluation(config: dict,
+                        train_seeds: list = None,
+                        robustness: bool = False,
+                        window_seeds: list = None):
+    """
+    1. Primary: fixed full-test-period episode for buy-and-hold,
+       MARL-no-coordinator and MARL+LLM (per training seed).
+       std columns = variance across TRAINING seeds.
+    2. Optional robustness: random-start test windows, same windows for
+       every strategy, using the first training seed's checkpoints.
+    Save results to results/logs/
+    """
+    if train_seeds is None:
+        train_seeds = [None]
+    if window_seeds is None:
+        window_seeds = list(range(10))
+
+    os.makedirs("results/logs", exist_ok=True)
+
+    test_df = evaluate_test_period(config, train_seeds)
+    test_df.to_csv("results/logs/test_period_results.csv", index=False)
+    print("\nSaved → results/logs/test_period_results.csv")
+    print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
+
+    test_summary = summarise(test_df)
+    test_summary.to_csv("results/logs/test_period_summary.csv", index=False)
+    print("Saved → results/logs/test_period_summary.csv")
+
+    if robustness:
+        price_ckpt, sentiment_ckpt = checkpoint_paths(train_seeds[0])
+        bah_df  = buy_and_hold_multi_seed(config, window_seeds)
+        marl_df = evaluate_multi_seed(
+            price_ckpt, sentiment_ckpt, config,
+            seeds=window_seeds, use_llm=False
+        )
+        llm_df  = evaluate_multi_seed(
+            price_ckpt, sentiment_ckpt, config,
+            seeds=window_seeds, use_llm=True
+        )
+        rob_df = pd.concat([bah_df, marl_df, llm_df], ignore_index=True)
+        rob_df["train_seed"] = train_seeds[0]
+        rob_df["note"]       = ROBUSTNESS_NOTE
+        rob_df.to_csv("results/logs/robustness_windows_results.csv", index=False)
+        print("\nSaved → results/logs/robustness_windows_results.csv")
+        print_summary(rob_df, f"ROBUSTNESS: RANDOM TEST WINDOWS ({ROBUSTNESS_NOTE})")
+
+        rob_summary = summarise(rob_df)
+        rob_summary["note"] = ROBUSTNESS_NOTE
+        rob_summary.to_csv("results/logs/robustness_windows_summary.csv", index=False)
+        print("Saved → results/logs/robustness_windows_summary.csv")
 
     print("\n" + "="*65)
-    print("FINAL COMPARISON TABLE")
+    print("FINAL COMPARISON TABLE (fixed test period)")
     print("="*65)
-    print(summary_df.to_string(index=False))
+    print(test_summary.to_string(index=False))
 
-    return all_results, summary_df
+    return test_df, test_summary
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate agents on the test split")
+    parser.add_argument("--train-seeds", type=int, nargs="*", default=None,
+                        help="training seeds to evaluate (checkpoints in "
+                             "results/checkpoints/seed{N}/); default: "
+                             "unseeded checkpoints in results/checkpoints/")
+    parser.add_argument("--robustness", action="store_true",
+                        help="also run random-start test windows "
+                             "(overlapping, not independent)")
+    parser.add_argument("--window-seeds", type=int, default=10,
+                        help="number of random windows for --robustness")
+    args = parser.parse_args()
+
     config = load_config()
-
-    price_ckpt     = "results/checkpoints/price_agent_final.zip"
-    sentiment_ckpt = "results/checkpoints/sentiment_agent_final.zip"
-    seeds          = list(range(10))  # seeds 0-9
-
-    all_results, summary = run_full_evaluation(
-        config, price_ckpt, sentiment_ckpt, seeds
+    run_full_evaluation(
+        config,
+        train_seeds  = args.train_seeds or None,
+        robustness   = args.robustness,
+        window_seeds = list(range(args.window_seeds)),
     )
