@@ -14,9 +14,11 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 def fetch_ticker(ticker: str, start: str, end: str) -> pd.DataFrame:
-    """Fetch OHLCV data for one ticker from Yahoo Finance."""
+    """Fetch OHLCV data for one ticker from Yahoo Finance (end date inclusive)."""
     print(f"Fetching {ticker}...")
-    df = yf.download(ticker, start=start, end=end,
+    # yfinance treats end as exclusive, so ask for one day past it
+    end_exclusive = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    df = yf.download(ticker, start=start, end=end_exclusive,
                      auto_adjust=True, progress=False)
 
     # Flatten MultiIndex columns (newer yfinance versions)
