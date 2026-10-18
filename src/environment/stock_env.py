@@ -80,13 +80,48 @@ def load_sentiment_data() -> dict:
     return data
 
 
+def roll_to_trading_days(sent_df: pd.DataFrame,
+                         trading_days: pd.DatetimeIndex) -> pd.DataFrame:
+    """
+    Move headline days that are not trading days (weekends, holidays) to the
+    next trading day and combine them with that day's headlines.
+    Mean is count-weighted, std is the pooled sample std (same as computing
+    it over the individual headlines). Days before the first or after the
+    last trading day are dropped.
+    """
+    sent_df = sent_df[(sent_df.index >= trading_days[0]) &
+                      (sent_df.index <= trading_days[-1])]
+    target = trading_days[trading_days.searchsorted(sent_df.index, side="left")]
+
+    n = sent_df["headline_count"]
+    m = sent_df["sentiment_score"]
+    s = sent_df["sentiment_std"]
+    parts = pd.DataFrame({"n": n.values, "nm": (n * m).values,
+                          "nm2": (n * m * m).values,
+                          "ss": ((n - 1) * s * s).values}, index=target)
+    g = parts.groupby(level=0).sum()
+
+    mean = g["nm"] / g["n"]
+    # within-day sum of squares + between-day sum of squares around the new mean
+    total_ss = g["ss"] + g["nm2"] - g["n"] * mean * mean
+    var = (total_ss / (g["n"] - 1)).where(g["n"] > 1, 0.0).clip(lower=0.0)
+
+    rolled = pd.DataFrame({"sentiment_score": mean,
+                           "sentiment_std": np.sqrt(var),
+                           "headline_count": g["n"]})
+    rolled.index.name = sent_df.index.name
+    return rolled
+
+
 def build_merged_dataset(price_data: dict,
                           sentiment_data: dict,
                           episode_length: int = 252) -> dict:
     """
     Align price and sentiment data on the same daily index.
+    Headlines on non-trading days are rolled forward to the next trading day.
     Forward-fills missing sentiment days for at most SENTIMENT_FFILL_LIMIT
     trading days, then fills with 0.0.
+    headline_count_norm = log1p(count) / max over the TRAIN period only.
     Adds has_sentiment flag (1 = real headlines that day, 0 = filled).
     Returns dict of {ticker: merged_dataframe}.
     """
@@ -97,8 +132,9 @@ def build_merged_dataset(price_data: dict,
         sent_df  = sentiment_data.get(ticker)
 
         if sent_df is not None:
-            # Mark which dates have real sentiment
-            sent_df = sent_df.copy()
+            # Roll weekend / holiday headlines onto the next trading day,
+            # then mark which dates have real sentiment
+            sent_df = roll_to_trading_days(sent_df, price_df.index)
             sent_df["has_sentiment"] = 1.0
 
             # Merge on price index (left join — keeps all trading days)
@@ -114,11 +150,12 @@ def build_merged_dataset(price_data: dict,
                     .fillna(0.0)
                 )
 
-            # Normalise headline count to 0-1
-            max_count = merged_df["headline_count"].max()
+            # Normalise log headline count by the TRAIN-period maximum only
+            # (no test-period information; test values may exceed 1)
+            log_count = np.log1p(merged_df["headline_count"])
+            max_log   = log_count[merged_df.index <= TRAIN_END].max()
             merged_df["headline_count_norm"] = (
-                merged_df["headline_count"] / max_count
-                if max_count > 0 else 0.0
+                log_count / max_log if max_log > 0 else 0.0
             )
         else:
             # No sentiment data — fill with zeros
