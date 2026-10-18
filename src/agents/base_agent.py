@@ -27,6 +27,8 @@ class BaseTrader:
         self.lr          = config["agents"][agent_id]["learning_rate"]
         self.batch_size  = config["agents"][agent_id]["batch_size"]
         self.gamma       = config["agents"][agent_id]["gamma"]
+        # Optional training seed (None = unseeded, previous behaviour)
+        self.seed        = config.get("training", {}).get("seed")
 
     def _make_single_env(self):
         """
@@ -112,6 +114,7 @@ class BaseTrader:
             ent_coef      = 0.01,
             device        = "cpu",
             verbose       = 0,
+            seed          = self.seed,
         )
 
     def train(self, total_timesteps: int):

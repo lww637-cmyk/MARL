@@ -5,6 +5,8 @@ Designed to run on Google Colab with GPU acceleration.
 """
 
 import os
+import random
+import argparse
 import yaml
 import numpy as np
 import mlflow
@@ -29,11 +31,13 @@ class TrainingCallback(BaseCallback):
     """
 
     def __init__(self, agent_id: str, config: dict,
-                 save_freq: int = 50000, verbose: int = 0):
+                 save_freq: int = 50000, verbose: int = 0,
+                 ckpt_dir: str = "results/checkpoints"):
         super().__init__(verbose)
         self.agent_id  = agent_id
         self.config    = config
         self.save_freq = save_freq
+        self.ckpt_dir  = ckpt_dir
         self.episode_rewards = []
         self.episode_count   = 0
 
@@ -53,8 +57,8 @@ class TrainingCallback(BaseCallback):
 
         # Save checkpoint
         if self.n_calls % self.save_freq == 0:
-            os.makedirs("results/checkpoints", exist_ok=True)
-            path = f"results/checkpoints/{self.agent_id}_step{self.n_calls}"
+            os.makedirs(self.ckpt_dir, exist_ok=True)
+            path = f"{self.ckpt_dir}/{self.agent_id}_step{self.n_calls}"
             self.model.save(path)
             print(f"Checkpoint saved: {path}")
 
@@ -107,38 +111,66 @@ def evaluate_agent(agent, env: StockTradingEnv,
 
 # ── main training ────────────────────────────────────────────────────────────
 
-def train(config: dict):
+def checkpoint_dir(seed: int = None) -> str:
+    """results/checkpoints for unseeded runs, results/checkpoints/seed{N} otherwise."""
+    if seed is None:
+        return "results/checkpoints"
+    return f"results/checkpoints/seed{seed}"
+
+
+def set_global_seed(seed: int):
+    """Seed numpy, random and torch for a reproducible training run."""
+    np.random.seed(seed)
+    random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+    except ImportError:
+        pass
+
+
+def train(config: dict, seed: int = None):
     """
     Full training pipeline:
-    1. Initialise environment and agents
+    1. Initialise environment and agents (train split only)
     2. Train price agent
     3. Train sentiment agent
     4. Evaluate both agents
     5. Save final models
+
+    seed : optional training seed. When given, all RNGs and PPO are seeded
+           and checkpoints go to results/checkpoints/seed{seed}/.
     """
     total_timesteps = config["training"]["total_timesteps"]
     eval_freq       = config["training"]["eval_frequency"]
     save_freq       = config["training"]["save_frequency"]
     n_eval_episodes = config["training"]["n_eval_episodes"]
 
-    os.makedirs("results/checkpoints", exist_ok=True)
+    if seed is not None:
+        set_global_seed(seed)
+        config["training"]["seed"] = seed   # read by BaseTrader -> PPO(seed=...)
+    ckpt_dir = checkpoint_dir(seed)
+
+    os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs("results/logs", exist_ok=True)
 
     # Initialise environment
     print("Initialising environment...")
-    env = StockTradingEnv(config, mode="train")
-    print(f"Environment ready — {env.n_steps} trading days available")
+    env = StockTradingEnv(config, mode="train", split="train")
+    print(f"Environment ready — {env.n_steps} trading days available (train split)")
 
     # Start MLflow run
     mlflow.set_experiment("agentic_marl_trading")
 
-    with mlflow.start_run(run_name="marl_training"):
+    run_name = "marl_training" if seed is None else f"marl_training_seed{seed}"
+    with mlflow.start_run(run_name=run_name):
 
         # Log config params
         mlflow.log_param("total_timesteps", total_timesteps)
         mlflow.log_param("episode_length",  config["environment"]["episode_length"])
         mlflow.log_param("initial_capital", config["environment"]["initial_capital"])
         mlflow.log_param("tickers",         config["data"]["tickers"])
+        mlflow.log_param("train_seed",      seed)
 
         # ── Train Price Agent ──────────────────────────────────────────────
         print("\n" + "="*50)
@@ -147,7 +179,7 @@ def train(config: dict):
 
         price_agent = PriceAgent(env, config)
         price_callback = TrainingCallback(
-            "price_agent", config, save_freq=save_freq
+            "price_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir
         )
 
         price_agent.model.learn(
@@ -156,7 +188,7 @@ def train(config: dict):
             progress_bar    = True,
         )
 
-        price_agent.save("results/checkpoints/price_agent_final.zip")
+        price_agent.save(f"{ckpt_dir}/price_agent_final.zip")
         print("Price agent training complete.")
 
         # Evaluate price agent
@@ -179,7 +211,7 @@ def train(config: dict):
 
         sentiment_agent = SentimentAgent(env, config)
         sentiment_callback = TrainingCallback(
-            "sentiment_agent", config, save_freq=save_freq
+            "sentiment_agent", config, save_freq=save_freq, ckpt_dir=ckpt_dir
         )
 
         sentiment_agent.model.learn(
@@ -188,7 +220,7 @@ def train(config: dict):
             progress_bar    = True,
         )
 
-        sentiment_agent.save("results/checkpoints/sentiment_agent_final.zip")
+        sentiment_agent.save(f"{ckpt_dir}/sentiment_agent_final.zip")
         print("Sentiment agent training complete.")
 
         # Evaluate sentiment agent
@@ -209,11 +241,16 @@ def train(config: dict):
         print("\n" + "="*50)
         print("TRAINING COMPLETE")
         print("="*50)
-        print(f"Checkpoints saved to results/checkpoints/")
+        print(f"Checkpoints saved to {ckpt_dir}/")
 
     return price_agent, sentiment_agent
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train price and sentiment agents")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="training seed; checkpoints go to results/checkpoints/seed{N}/")
+    args = parser.parse_args()
+
     config = load_config()
-    price_agent, sentiment_agent = train(config)
+    price_agent, sentiment_agent = train(config, seed=args.seed)
