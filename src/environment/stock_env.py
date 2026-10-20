@@ -51,6 +51,14 @@ SPLITS     = ("train", "test", "all")
 # Max trading days a sentiment value is carried forward after a real headline day
 SENTIMENT_FFILL_LIMIT = 5
 
+# Price features are standardised with TRAIN-split mean/std (fit_price_scaler.py),
+# then clipped to +-PRICE_CLIP. Committed to git so Colab gets it with the clone.
+PRICE_SCALER_PATH = "data/price_scaler.json"
+PRICE_CLIP        = 5.0
+
+# Fixed partner used while training one agent (config training.partner)
+PARTNERS = ("neutral", "random")
+
 
 # ── data loader ──────────────────────────────────────────────────────────────
 
@@ -174,6 +182,103 @@ def build_merged_dataset(price_data: dict,
     return merged
 
 
+# ── price scaler ─────────────────────────────────────────────────────────────
+
+def common_trading_dates(dataset: dict, split: str = "all") -> list:
+    """Dates present for every ticker, restricted to the chronological split."""
+    common = None
+    for ticker in TICKERS:
+        dates  = set(dataset[ticker].index)
+        common = dates if common is None else common & dates
+    common = sorted(common)
+    if split == "train":
+        common = [d for d in common if d <= TRAIN_END]
+    elif split == "test":
+        common = [d for d in common if d >= TEST_START]
+    return common
+
+
+def compute_price_scaler(dataset: dict) -> dict:
+    """
+    Mean and std of every (ticker, price feature) over the TRAIN split only.
+    A std of 0 is replaced by 1 so a constant feature maps to 0.
+    """
+    train_dates = common_trading_dates(dataset, "train")
+    mean, std = {}, {}
+    for ticker in TICKERS:
+        values = dataset[ticker].loc[train_dates, PRICE_FEATURES]
+        mean[ticker] = values.mean().tolist()
+        s = values.std(ddof=0)
+        std[ticker]  = s.where(s > 1e-8, 1.0).tolist()
+    return {
+        "tickers"    : list(TICKERS),
+        "features"   : list(PRICE_FEATURES),
+        "train_start": str(train_dates[0].date()),
+        "train_end"  : str(train_dates[-1].date()),
+        "n_days"     : len(train_dates),
+        "clip"       : PRICE_CLIP,
+        "mean"       : mean,
+        "std"        : std,
+    }
+
+
+def load_price_scaler(path: str = PRICE_SCALER_PATH) -> dict:
+    """Load the price scaler and check it matches the current tickers/features."""
+    import json
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found — run `python fit_price_scaler.py` "
+            f"(train split only) or pull it from git"
+        )
+    with open(path) as f:
+        scaler = json.load(f)
+    if scaler["tickers"] != list(TICKERS) or scaler["features"] != list(PRICE_FEATURES):
+        raise ValueError(
+            f"{path} was fitted for tickers {scaler['tickers']} / features "
+            f"{scaler['features']}; re-run fit_price_scaler.py"
+        )
+    if pd.Timestamp(scaler["train_end"]) > TRAIN_END:
+        raise ValueError(f"{path} uses data after TRAIN_END={TRAIN_END.date()}")
+    return scaler
+
+
+def scale_price_features(ticker: str, values, scaler: dict) -> np.ndarray:
+    """Standardise one ticker's PRICE_FEATURES values and clip to +-clip."""
+    mean = np.asarray(scaler["mean"][ticker], dtype=np.float64)
+    std  = np.asarray(scaler["std"][ticker], dtype=np.float64)
+    z    = (np.asarray(values, dtype=np.float64) - mean) / std
+    return np.clip(z, -scaler["clip"], scaler["clip"])
+
+
+# ── action helpers ───────────────────────────────────────────────────────────
+
+def normalise_action(action) -> np.ndarray:
+    """
+    Map an agent action to portfolio weights: clip to [0, 1] and divide by the sum.
+    An all-zero action (sum = 0) means 100% cash.
+    """
+    action = np.clip(np.asarray(action, dtype=np.float32), 0.0, 1.0)
+    total  = action.sum()
+    if total <= 1e-8:
+        weights = np.zeros(ACTION_SIZE, dtype=np.float32)
+        weights[-1] = 1.0
+        return weights
+    return (action / total).astype(np.float32)
+
+
+def partner_action(kind: str, action_space) -> np.ndarray:
+    """
+    Suggestion of the agent that is NOT being trained (config training.partner):
+    neutral = equal weights on the stocks and cash, random = uniform sample.
+    Both are passed through normalise_action like any agent suggestion.
+    """
+    if kind == "neutral":
+        return np.full(ACTION_SIZE, 1.0 / ACTION_SIZE, dtype=np.float32)
+    if kind == "random":
+        return normalise_action(action_space.sample())
+    raise ValueError(f"training.partner must be one of {PARTNERS}, got {kind!r}")
+
+
 # ── environment ──────────────────────────────────────────────────────────────
 
 class StockTradingEnv(AECEnv):
@@ -218,20 +323,13 @@ class StockTradingEnv(AECEnv):
             price_data, sentiment_data, self.episode_length
         )
 
-        # Common date index (intersection across all tickers)
-        common_dates = None
-        for ticker in TICKERS:
-            dates = set(self.dataset[ticker].index)
-            common_dates = dates if common_dates is None else common_dates & dates
-        common_dates = sorted(list(common_dates))
-
-        # Restrict to the chronological split
-        if split == "train":
-            common_dates = [d for d in common_dates if d <= TRAIN_END]
-        elif split == "test":
-            common_dates = [d for d in common_dates if d >= TEST_START]
-        self.common_dates = common_dates
+        # Common date index (intersection across all tickers),
+        # restricted to the chronological split
+        self.common_dates = common_trading_dates(self.dataset, split)
         self.n_steps      = len(self.common_dates)
+
+        # Train-split price scaler (same file for every split and consumer)
+        self.price_scaler = load_price_scaler()
 
         if full_period:
             self.episode_length = self.n_steps - 1
@@ -335,11 +433,11 @@ class StockTradingEnv(AECEnv):
         if agent == "price_agent":
             features = []
             for ticker in TICKERS:
-                row = self.dataset[ticker].loc[date]
-                ticker_features = [row[f] for f in PRICE_FEATURES]
-                # Normalise raw close price to similar scale as other features
-                ticker_features[0] = ticker_features[0] / 1000.0
-                features.extend(ticker_features)
+                row = self.dataset[ticker].loc[date, PRICE_FEATURES]
+                # Standardise with train-split mean/std, clipped to +-PRICE_CLIP
+                features.extend(
+                    scale_price_features(ticker, row.values, self.price_scaler)
+                )
             return np.array(features + shared.tolist(), dtype=np.float32)
 
         elif agent == "sentiment_agent":
@@ -364,8 +462,7 @@ class StockTradingEnv(AECEnv):
             return
 
         # Normalise action to valid portfolio weights (sum to 1)
-        action = np.clip(action, 0.0, 1.0)
-        action = action / (action.sum() + 1e-8)
+        action = normalise_action(action)
 
         # Store this agent's suggestion
         self.suggestions[self.agent_selection] = action

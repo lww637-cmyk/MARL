@@ -6,6 +6,8 @@ Designed to run on Google Colab with GPU acceleration.
 
 import os
 import re
+import json
+import hashlib
 import random
 import shutil
 import argparse
@@ -15,7 +17,9 @@ import mlflow
 import mlflow.pytorch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from src.environment.stock_env import StockTradingEnv
+from src.environment.stock_env import (
+    StockTradingEnv, load_price_scaler, partner_action
+)
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
 
@@ -36,6 +40,51 @@ def mirror_file(path: str, copy_dir: str = None):
     shutil.copy(path, dst + ".tmp")
     os.replace(dst + ".tmp", dst)
     print(f"Copied {path} → {copy_dir}/")
+
+
+SETUP_FILE = "training_setup.json"
+
+
+def training_setup(config: dict) -> dict:
+    """
+    What a checkpoint depends on besides its weights. Resuming from a
+    checkpoint trained under a different setup is refused.
+    """
+    scaler = json.dumps(load_price_scaler(), sort_keys=True)
+    return {
+        "price_scaler_sha256": hashlib.sha256(scaler.encode()).hexdigest()[:16],
+        "partner"            : config["training"].get("partner", "neutral"),
+        "action_mapping"     : "clip_normalise_in_wrapper",
+    }
+
+
+def check_training_setup(setup: dict, dirs: list):
+    """
+    Refuse to mix checkpoints from a different setup (e.g. the old unscaled
+    price features or random partner) in any of dirs, then record setup there.
+    """
+    for d in dirs:
+        if d is None or not os.path.isdir(d):
+            continue
+        has_ckpt = any(find_checkpoints(a, [d], 0)
+                       for a in ["price_agent", "sentiment_agent"])
+        path = os.path.join(d, SETUP_FILE)
+        saved = None
+        if os.path.exists(path):
+            with open(path) as f:
+                saved = json.load(f)
+        if has_ckpt and saved != setup:
+            raise RuntimeError(
+                f"{d} holds checkpoints from a different training setup "
+                f"({saved or 'no ' + SETUP_FILE}, now {setup}). "
+                f"Use a new checkpoint folder or move the old checkpoints away."
+            )
+    for d in dirs:
+        if d is None:
+            continue
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, SETUP_FILE), "w") as f:
+            json.dump(setup, f, indent=1)
 
 
 def find_checkpoints(agent_id: str, dirs: list,
@@ -152,9 +201,11 @@ def evaluate_agent(agent, env: StockTradingEnv,
                    n_episodes: int = 5) -> dict:
     """
     Run agent for n_episodes in eval mode and return
-    average performance metrics.
+    average performance metrics. The other agent is the same
+    fixed partner as in training (config training.partner).
     """
     agent_id = agent.agent_id
+    partner  = agent.config["training"].get("partner", "neutral")
     all_returns  = []
     all_sharpes  = []
     all_drawdowns = []
@@ -173,7 +224,7 @@ def evaluate_agent(agent, env: StockTradingEnv,
             if current == agent_id:
                 action = agent.predict(env.observe(agent_id))
             else:
-                action = env.action_space(current).sample()
+                action = partner_action(partner, env.action_space(current))
 
             env.step(action)
 
@@ -239,6 +290,7 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
     resume_dirs = [copy_dir, ckpt_dir]
 
     os.makedirs(ckpt_dir, exist_ok=True)
+    check_training_setup(training_setup(config), resume_dirs)
     os.makedirs("results/logs", exist_ok=True)
 
     # Initialise environment
@@ -258,6 +310,7 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
         mlflow.log_param("initial_capital", config["environment"]["initial_capital"])
         mlflow.log_param("tickers",         config["data"]["tickers"])
         mlflow.log_param("train_seed",      seed)
+        mlflow.log_param("partner",         config["training"].get("partner", "neutral"))
 
         # ── Train Price Agent ──────────────────────────────────────────────
         print("\n" + "="*50)

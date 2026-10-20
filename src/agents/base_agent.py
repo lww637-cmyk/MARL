@@ -35,15 +35,25 @@ class BaseTrader:
         Creates a single-agent Gym wrapper for SB3 training.
         Bypasses PettingZoo AEC turn structure to avoid dead agent conflicts.
         Each wrapper creates its own environment instance.
+        The agent's action is mapped to weights exactly as in StockTradingEnv.step
+        (normalise_action). The other agent is a fixed partner set by
+        config training.partner: "neutral" (equal weights, default) or "random".
         """
         import gymnasium as gym
+        from src.environment.stock_env import (
+            StockTradingEnv, PARTNERS, normalise_action, partner_action
+        )
         agent_id = self.agent_id
         config   = self.config
+        partner  = config.get("training", {}).get("partner", "neutral")
+        if partner not in PARTNERS:
+            raise ValueError(
+                f"training.partner must be one of {PARTNERS}, got {partner!r}"
+            )
 
         class SingleAgentWrapper(gym.Env):
             def __init__(self):
                 super().__init__()
-                from src.environment.stock_env import StockTradingEnv
                 self._env         = StockTradingEnv(config, mode="train")
                 self.observation_space = self._env.observation_space(agent_id)
                 self.action_space      = self._env.action_space(agent_id)
@@ -58,16 +68,17 @@ class BaseTrader:
             def step(self, action):
                 self._step_count += 1
 
-                # Store our agent's suggestion
-                self._env.suggestions[agent_id] = action
+                # Store our agent's suggestion, normalised as in env.step
+                self._env.suggestions[agent_id] = normalise_action(action)
 
-                # Generate other agent's suggestion randomly
+                # Other agent's suggestion: fixed partner (neutral or random)
                 other = [
                     a for a in self._env.possible_agents
                     if a != agent_id
                 ][0]
-                self._env.suggestions[other] = \
-                    self._env.action_space(other).sample()
+                self._env.suggestions[other] = partner_action(
+                    partner, self._env.action_space(other)
+                )
 
                 # Execute portfolio step directly (bypass AEC turns)
                 self._env._execute_step()
@@ -126,12 +137,16 @@ class BaseTrader:
         print(f"{self.agent_id} training complete.")
 
     def predict(self, observation: np.ndarray) -> np.ndarray:
-        """Return action for given observation."""
+        """
+        Return portfolio weights for the given observation: the deterministic
+        action mapped with normalise_action, exactly as in training.
+        """
+        from src.environment.stock_env import normalise_action
         if self.model is None:
             raise RuntimeError("Model not trained or loaded.")
         obs = np.array(observation, dtype=np.float32)
         action, _ = self.model.predict(obs, deterministic=True)
-        return np.array(action, dtype=np.float32).flatten()
+        return normalise_action(np.array(action, dtype=np.float32).flatten())
 
     def save(self, path: str = None):
         """Save model weights to results/checkpoints/."""

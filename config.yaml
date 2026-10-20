@@ -48,6 +48,10 @@ training:
   eval_frequency: 10000
   n_eval_episodes: 5
   save_frequency: 100000
+  # Suggestion of the OTHER agent while one agent trains (they train separately):
+  #   neutral = fixed equal weights on the 5 stocks and cash (default)
+  #   random  = a new uniform random allocation every step (old behaviour)
+  partner: "neutral"
 
 evaluation:
   metrics:
