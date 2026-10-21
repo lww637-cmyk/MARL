@@ -53,6 +53,11 @@ training:
   #   random  = a new uniform random allocation every step (old behaviour)
   partner: "neutral"
 
+paths:
+  # Training writes, and evaluation / SHAP / baselines load,
+  # {checkpoints_root}/seed{N}/{price,sentiment}_agent_final.zip
+  checkpoints_root: "results/checkpoints_scaled"
+
 evaluation:
   metrics:
     - cumulative_return

@@ -7,7 +7,6 @@ Designed to run on Google Colab with GPU acceleration.
 import os
 import re
 import json
-import hashlib
 import random
 import shutil
 import argparse
@@ -18,10 +17,13 @@ import mlflow.pytorch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from src.environment.stock_env import (
-    StockTradingEnv, load_price_scaler, partner_action
+    StockTradingEnv, partner_action
 )
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
+from src.checkpoints import (
+    SETUP_FILE, AGENT_IDS, training_setup, check_setup, checkpoint_dir,
+)
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -42,43 +44,16 @@ def mirror_file(path: str, copy_dir: str = None):
     print(f"Copied {path} → {copy_dir}/")
 
 
-SETUP_FILE = "training_setup.json"
-
-
-def training_setup(config: dict) -> dict:
-    """
-    What a checkpoint depends on besides its weights. Resuming from a
-    checkpoint trained under a different setup is refused.
-    """
-    scaler = json.dumps(load_price_scaler(), sort_keys=True)
-    return {
-        "price_scaler_sha256": hashlib.sha256(scaler.encode()).hexdigest()[:16],
-        "partner"            : config["training"].get("partner", "neutral"),
-        "action_mapping"     : "clip_normalise_in_wrapper",
-    }
-
-
 def check_training_setup(setup: dict, dirs: list):
     """
-    Refuse to mix checkpoints from a different setup (e.g. the old unscaled
+    Refuse to resume checkpoints from a different setup (e.g. the old unscaled
     price features or random partner) in any of dirs, then record setup there.
     """
     for d in dirs:
         if d is None or not os.path.isdir(d):
             continue
-        has_ckpt = any(find_checkpoints(a, [d], 0)
-                       for a in ["price_agent", "sentiment_agent"])
-        path = os.path.join(d, SETUP_FILE)
-        saved = None
-        if os.path.exists(path):
-            with open(path) as f:
-                saved = json.load(f)
-        if has_ckpt and saved != setup:
-            raise RuntimeError(
-                f"{d} holds checkpoints from a different training setup "
-                f"({saved or 'no ' + SETUP_FILE}, now {setup}). "
-                f"Use a new checkpoint folder or move the old checkpoints away."
-            )
+        if any(find_checkpoints(a, [d], 0) for a in AGENT_IDS):
+            check_setup(d, setup)
     for d in dirs:
         if d is None:
             continue
@@ -243,13 +218,6 @@ def evaluate_agent(agent, env: StockTradingEnv,
 
 # ── main training ────────────────────────────────────────────────────────────
 
-def checkpoint_dir(seed: int = None) -> str:
-    """results/checkpoints for unseeded runs, results/checkpoints/seed{N} otherwise."""
-    if seed is None:
-        return "results/checkpoints"
-    return f"results/checkpoints/seed{seed}"
-
-
 def set_global_seed(seed: int):
     """Seed numpy, random and torch for a reproducible training run."""
     np.random.seed(seed)
@@ -271,7 +239,7 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
     5. Save final models
 
     seed : optional training seed. When given, all RNGs and PPO are seeded
-           and checkpoints go to results/checkpoints/seed{seed}/.
+           and checkpoints go to {paths.checkpoints_root}/seed{seed}/.
     copy_dir : optional folder (e.g. on Google Drive) that every checkpoint
                and final model is copied to as soon as it is saved.
                If it (or the local checkpoint dir) already holds checkpoints
@@ -285,7 +253,7 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
     if seed is not None:
         set_global_seed(seed)
         config["training"]["seed"] = seed   # read by BaseTrader -> PPO(seed=...)
-    ckpt_dir = checkpoint_dir(seed)
+    ckpt_dir = checkpoint_dir(config, seed)
     # Resume from the newest checkpoint for this seed (Drive copy first)
     resume_dirs = [copy_dir, ckpt_dir]
 
@@ -391,7 +359,8 @@ def train(config: dict, seed: int = None, copy_dir: str = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train price and sentiment agents")
     parser.add_argument("--seed", type=int, default=None,
-                        help="training seed; checkpoints go to results/checkpoints/seed{N}/")
+                        help="training seed; checkpoints go to "
+                             "{paths.checkpoints_root}/seed{N}/")
     parser.add_argument("--copy-dir", type=str, default=None,
                         help="also copy every checkpoint here (e.g. a Google Drive folder)")
     args = parser.parse_args()

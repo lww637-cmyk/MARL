@@ -1,5 +1,6 @@
 venv/
 results/checkpoints/
+results/checkpoints_scaled/
 data/raw/
 data/processed/
 data/sentiment/
