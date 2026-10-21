@@ -16,6 +16,8 @@ Secondary robustness check (--robustness):
     is short, so these windows OVERLAP heavily and are NOT independent
     samples — do not treat their spread as a confidence interval.
 
+--no-llm skips MARL+LLM entirely (no Gemini client, no API calls).
+
 Run this after downloading checkpoints from Colab.
 """
 
@@ -27,7 +29,6 @@ import os
 from src.environment.stock_env import StockTradingEnv
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
-from src.coordinator.llm_coordinator import coordinate_or_average
 from src.checkpoints import (
     checkpoint_dir, load_checked_agents, training_setup, check_setup,
 )
@@ -134,6 +135,8 @@ def run_episode(env: StockTradingEnv,
             sent_action  = sentiment_agent.predict(sent_obs)
 
             if use_llm and config is not None:
+                # imported here so --no-llm never creates the Gemini client
+                from src.coordinator.llm_coordinator import coordinate_or_average
                 # Call LLM every LLM_FREQUENCY steps
                 if llm_call_counter % LLM_FREQUENCY == 0:
                     context = {
@@ -191,12 +194,13 @@ def _print_row(prefix: str, summary: dict):
 
 # ── primary: one fixed full-test-period episode ──────────────────────────────
 
-def evaluate_test_period(config: dict, dirs: dict) -> pd.DataFrame:
+def evaluate_test_period(config: dict, dirs: dict,
+                         use_llm: bool = True) -> pd.DataFrame:
     """
     One full-test-period episode per strategy, same window for all.
     MARL strategies are repeated per training seed (dirs maps
     train_seed -> checkpoint folder); buy-and-hold is deterministic so it
-    runs once.
+    runs once. use_llm=False skips MARL+LLM.
     """
     env = make_test_env(config, full_period=True)
     print(f"\nFixed test-period episode: "
@@ -211,10 +215,10 @@ def evaluate_test_period(config: dict, dirs: dict) -> pd.DataFrame:
 
     for train_seed, ckpt_dir in dirs.items():
         price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
-        for use_llm in (False, True):
-            label   = "MARL+LLM" if use_llm else "MARL-no-coordinator"
+        for llm in ((False, True) if use_llm else (False,)):
+            label   = "MARL+LLM" if llm else "MARL-no-coordinator"
             summary = run_episode(env, price_agent, sentiment_agent,
-                                  use_llm=use_llm, config=config)
+                                  use_llm=llm, config=config)
             summary.update(strategy=label, train_seed=train_seed)
             rows.append(summary)
             _print_row(f"{label:20s} train_seed={train_seed}", summary)
@@ -323,7 +327,9 @@ def run_full_evaluation(config: dict,
                         train_seeds: list = None,
                         robustness: bool = False,
                         window_seeds: list = None,
-                        checkpoint_root: str = None):
+                        checkpoint_root: str = None,
+                        use_llm: bool = True,
+                        tag: str = None):
     """
     1. Primary: fixed full-test-period episode for buy-and-hold,
        MARL-no-coordinator and MARL+LLM (per training seed).
@@ -332,7 +338,8 @@ def run_full_evaluation(config: dict,
        every strategy, using the first training seed's checkpoints.
     Checkpoints: {checkpoint_root or paths.checkpoints_root}/seed{N}/.
     Every seed folder is checked against the current setup before anything runs.
-    Save results to results/logs/
+    use_llm=False skips every MARL+LLM run, so Gemini is never called.
+    Save results to results/logs/, or results/logs/{tag}/ when tag is given
     """
     if train_seeds is None:
         train_seeds = DEFAULT_TRAIN_SEEDS
@@ -345,16 +352,17 @@ def run_full_evaluation(config: dict,
     for ckpt_dir in dirs.values():
         check_setup(ckpt_dir, setup)
 
-    os.makedirs("results/logs", exist_ok=True)
+    log_dir = os.path.join("results", "logs", tag) if tag else os.path.join("results", "logs")
+    os.makedirs(log_dir, exist_ok=True)
 
-    test_df = evaluate_test_period(config, dirs)
-    test_df.to_csv("results/logs/test_period_results.csv", index=False)
-    print("\nSaved → results/logs/test_period_results.csv")
+    test_df = evaluate_test_period(config, dirs, use_llm=use_llm)
+    test_df.to_csv(os.path.join(log_dir, "test_period_results.csv"), index=False)
+    print(f"\nSaved → {os.path.join(log_dir, 'test_period_results.csv')}")
     print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
 
     test_summary = summarise(test_df)
-    test_summary.to_csv("results/logs/test_period_summary.csv", index=False)
-    print("Saved → results/logs/test_period_summary.csv")
+    test_summary.to_csv(os.path.join(log_dir, "test_period_summary.csv"), index=False)
+    print(f"Saved → {os.path.join(log_dir, 'test_period_summary.csv')}")
 
     if robustness:
         ckpt_dir = dirs[train_seeds[0]]
@@ -362,20 +370,22 @@ def run_full_evaluation(config: dict,
         marl_df = evaluate_multi_seed(
             ckpt_dir, config, seeds=window_seeds, use_llm=False
         )
-        llm_df  = evaluate_multi_seed(
-            ckpt_dir, config, seeds=window_seeds, use_llm=True
-        )
-        rob_df = pd.concat([bah_df, marl_df, llm_df], ignore_index=True)
+        rob_parts = [bah_df, marl_df]
+        if use_llm:
+            rob_parts.append(evaluate_multi_seed(
+                ckpt_dir, config, seeds=window_seeds, use_llm=True
+            ))
+        rob_df = pd.concat(rob_parts, ignore_index=True)
         rob_df["train_seed"] = train_seeds[0]
         rob_df["note"]       = ROBUSTNESS_NOTE
-        rob_df.to_csv("results/logs/robustness_windows_results.csv", index=False)
-        print("\nSaved → results/logs/robustness_windows_results.csv")
+        rob_df.to_csv(os.path.join(log_dir, "robustness_windows_results.csv"), index=False)
+        print(f"\nSaved → {os.path.join(log_dir, 'robustness_windows_results.csv')}")
         print_summary(rob_df, f"ROBUSTNESS: RANDOM TEST WINDOWS ({ROBUSTNESS_NOTE})")
 
         rob_summary = summarise(rob_df)
         rob_summary["note"] = ROBUSTNESS_NOTE
-        rob_summary.to_csv("results/logs/robustness_windows_summary.csv", index=False)
-        print("Saved → results/logs/robustness_windows_summary.csv")
+        rob_summary.to_csv(os.path.join(log_dir, "robustness_windows_summary.csv"), index=False)
+        print(f"Saved → {os.path.join(log_dir, 'robustness_windows_summary.csv')}")
 
     print("\n" + "="*65)
     print("FINAL COMPARISON TABLE (fixed test period)")
@@ -398,6 +408,11 @@ if __name__ == "__main__":
                              "(overlapping, not independent)")
     parser.add_argument("--window-seeds", type=int, default=10,
                         help="number of random windows for --robustness")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="skip MARL+LLM runs (no Gemini calls)")
+    parser.add_argument("--tag", type=str, default=None,
+                        help="write results to results/logs/{tag}/ "
+                             "instead of results/logs/")
     args = parser.parse_args()
 
     config = load_config()
@@ -407,4 +422,6 @@ if __name__ == "__main__":
         robustness      = args.robustness,
         window_seeds    = list(range(args.window_seeds)),
         checkpoint_root = args.checkpoint_root,
+        use_llm         = not args.no_llm,
+        tag             = args.tag,
     )
