@@ -6,8 +6,9 @@ Evaluation script for trained MARL agents. Test split only (>= 2022-07-01).
 Primary evaluation:
     ONE fixed episode covering the full test period, identical for
     buy-and-hold, MARL-no-coordinator and MARL+LLM. Run once per
-    training seed (results/checkpoints/seed{N}/) to report variance
-    across training seeds.
+    training seed ({checkpoint root}/seed{N}/) to report variance
+    across training seeds. Each seed folder must hold a
+    training_setup.json matching the current setup, or it is refused.
 
 Secondary robustness check (--robustness):
     Random-start windows of config episode_length inside the test split.
@@ -27,6 +28,9 @@ from src.environment.stock_env import StockTradingEnv
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.coordinator.llm_coordinator import coordinate_or_average
+from src.checkpoints import (
+    checkpoint_dir, load_checked_agents, training_setup, check_setup,
+)
 
 # Global seed for full reproducibility
 GLOBAL_SEED = 42
@@ -49,12 +53,7 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def checkpoint_paths(train_seed: int = None) -> tuple:
-    """Checkpoint paths for a training seed (None = unseeded legacy run)."""
-    ckpt_dir = "results/checkpoints" if train_seed is None \
-        else f"results/checkpoints/seed{train_seed}"
-    return (f"{ckpt_dir}/price_agent_final.zip",
-            f"{ckpt_dir}/sentiment_agent_final.zip")
+DEFAULT_TRAIN_SEEDS = [0, 1, 2]
 
 
 def make_test_env(config: dict, full_period: bool) -> StockTradingEnv:
@@ -63,24 +62,17 @@ def make_test_env(config: dict, full_period: bool) -> StockTradingEnv:
                            full_period=full_period)
 
 
-def load_agents(env: StockTradingEnv, config: dict,
-                price_ckpt: str, sentiment_ckpt: str) -> tuple:
+def load_agents(env: StockTradingEnv, config: dict, ckpt_dir: str) -> tuple:
+    """Final agents from ckpt_dir, refused unless trained with the current setup."""
     price_agent     = PriceAgent(env, config)
     sentiment_agent = SentimentAgent(env, config)
-
-    if os.path.exists(price_ckpt):
-        price_agent.load(price_ckpt)
-        print(f"Loaded price agent from {price_ckpt}")
-    else:
-        print(f"WARNING: {price_ckpt} not found — using untrained model")
-
-    if os.path.exists(sentiment_ckpt):
-        sentiment_agent.load(sentiment_ckpt)
-        print(f"Loaded sentiment agent from {sentiment_ckpt}")
-    else:
-        print(f"WARNING: {sentiment_ckpt} not found — using untrained model")
-
+    load_checked_agents(ckpt_dir, config, [price_agent, sentiment_agent])
     return price_agent, sentiment_agent
+
+
+def seed_dirs(config: dict, train_seeds: list, root: str = None) -> dict:
+    """{train_seed: checkpoint folder}."""
+    return {s: checkpoint_dir(config, s, root) for s in train_seeds}
 
 
 def reset_window(env: StockTradingEnv, window_seed: int = None):
@@ -199,16 +191,13 @@ def _print_row(prefix: str, summary: dict):
 
 # ── primary: one fixed full-test-period episode ──────────────────────────────
 
-def evaluate_test_period(config: dict,
-                         train_seeds: list = None) -> pd.DataFrame:
+def evaluate_test_period(config: dict, dirs: dict) -> pd.DataFrame:
     """
     One full-test-period episode per strategy, same window for all.
-    MARL strategies are repeated per training seed; buy-and-hold is
-    deterministic so it runs once.
+    MARL strategies are repeated per training seed (dirs maps
+    train_seed -> checkpoint folder); buy-and-hold is deterministic so it
+    runs once.
     """
-    if train_seeds is None:
-        train_seeds = [None]
-
     env = make_test_env(config, full_period=True)
     print(f"\nFixed test-period episode: "
           f"{env.common_dates[0].date()} → {env.common_dates[-1].date()} "
@@ -220,11 +209,8 @@ def evaluate_test_period(config: dict,
     rows.append(summary)
     _print_row(f"{'buy_and_hold':20s}", summary)
 
-    for train_seed in train_seeds:
-        price_ckpt, sentiment_ckpt = checkpoint_paths(train_seed)
-        price_agent, sentiment_agent = load_agents(
-            env, config, price_ckpt, sentiment_ckpt
-        )
+    for train_seed, ckpt_dir in dirs.items():
+        price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
         for use_llm in (False, True):
             label   = "MARL+LLM" if use_llm else "MARL-no-coordinator"
             summary = run_episode(env, price_agent, sentiment_agent,
@@ -238,8 +224,7 @@ def evaluate_test_period(config: dict,
 
 # ── secondary: random-start windows (overlapping, not independent) ──────────
 
-def evaluate_multi_seed(price_ckpt: str,
-                        sentiment_ckpt: str,
+def evaluate_multi_seed(ckpt_dir: str,
                         config: dict,
                         seeds: list = None,
                         use_llm: bool = False) -> pd.DataFrame:
@@ -251,9 +236,7 @@ def evaluate_multi_seed(price_ckpt: str,
         seeds = list(range(10))
 
     env = make_test_env(config, full_period=False)
-    price_agent, sentiment_agent = load_agents(
-        env, config, price_ckpt, sentiment_ckpt
-    )
+    price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
 
     label = "MARL+LLM" if use_llm else "MARL-no-coordinator"
     print(f"\nEvaluating {label} across {len(seeds)} windows "
@@ -339,23 +322,32 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
 def run_full_evaluation(config: dict,
                         train_seeds: list = None,
                         robustness: bool = False,
-                        window_seeds: list = None):
+                        window_seeds: list = None,
+                        checkpoint_root: str = None):
     """
     1. Primary: fixed full-test-period episode for buy-and-hold,
        MARL-no-coordinator and MARL+LLM (per training seed).
        std columns = variance across TRAINING seeds.
     2. Optional robustness: random-start test windows, same windows for
        every strategy, using the first training seed's checkpoints.
+    Checkpoints: {checkpoint_root or paths.checkpoints_root}/seed{N}/.
+    Every seed folder is checked against the current setup before anything runs.
     Save results to results/logs/
     """
     if train_seeds is None:
-        train_seeds = [None]
+        train_seeds = DEFAULT_TRAIN_SEEDS
     if window_seeds is None:
         window_seeds = list(range(10))
 
+    dirs = seed_dirs(config, train_seeds, checkpoint_root)
+    # fail before any (LLM) episode runs if one seed folder is unusable
+    setup = training_setup(config)
+    for ckpt_dir in dirs.values():
+        check_setup(ckpt_dir, setup)
+
     os.makedirs("results/logs", exist_ok=True)
 
-    test_df = evaluate_test_period(config, train_seeds)
+    test_df = evaluate_test_period(config, dirs)
     test_df.to_csv("results/logs/test_period_results.csv", index=False)
     print("\nSaved → results/logs/test_period_results.csv")
     print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
@@ -365,15 +357,13 @@ def run_full_evaluation(config: dict,
     print("Saved → results/logs/test_period_summary.csv")
 
     if robustness:
-        price_ckpt, sentiment_ckpt = checkpoint_paths(train_seeds[0])
+        ckpt_dir = dirs[train_seeds[0]]
         bah_df  = buy_and_hold_multi_seed(config, window_seeds)
         marl_df = evaluate_multi_seed(
-            price_ckpt, sentiment_ckpt, config,
-            seeds=window_seeds, use_llm=False
+            ckpt_dir, config, seeds=window_seeds, use_llm=False
         )
         llm_df  = evaluate_multi_seed(
-            price_ckpt, sentiment_ckpt, config,
-            seeds=window_seeds, use_llm=True
+            ckpt_dir, config, seeds=window_seeds, use_llm=True
         )
         rob_df = pd.concat([bah_df, marl_df, llm_df], ignore_index=True)
         rob_df["train_seed"] = train_seeds[0]
@@ -397,10 +387,12 @@ def run_full_evaluation(config: dict,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate agents on the test split")
-    parser.add_argument("--train-seeds", type=int, nargs="*", default=None,
-                        help="training seeds to evaluate (checkpoints in "
-                             "results/checkpoints/seed{N}/); default: "
-                             "unseeded checkpoints in results/checkpoints/")
+    parser.add_argument("--checkpoint-root", type=str, default=None,
+                        help="folder holding the seed{N}/ checkpoint folders; "
+                             "default: paths.checkpoints_root in config.yaml")
+    parser.add_argument("--train-seeds", type=int, nargs="+",
+                        default=DEFAULT_TRAIN_SEEDS,
+                        help="training seeds to evaluate (default: 0 1 2)")
     parser.add_argument("--robustness", action="store_true",
                         help="also run random-start test windows "
                              "(overlapping, not independent)")
@@ -411,7 +403,8 @@ if __name__ == "__main__":
     config = load_config()
     run_full_evaluation(
         config,
-        train_seeds  = args.train_seeds or None,
-        robustness   = args.robustness,
-        window_seeds = list(range(args.window_seeds)),
+        train_seeds     = args.train_seeds,
+        robustness      = args.robustness,
+        window_seeds    = list(range(args.window_seeds)),
+        checkpoint_root = args.checkpoint_root,
     )

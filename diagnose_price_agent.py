@@ -9,7 +9,8 @@ TASK4 diagnostics for the price-agent collapse (train split only).
                 both add those changes). Does not change any project default.
                 TASK4 ran these before the TASK5 fix (raw features, random partner).
 
-  python diagnose_price_agent.py checkpoints /content/drive/MyDrive/MARL/results/checkpoints/seed0
+  python diagnose_price_agent.py checkpoints /content/drive/MyDrive/MARL/results/checkpoints_scaled/seed0
+  (add --any-setup to inspect checkpoints from an older training setup)
   python diagnose_price_agent.py pilot control --seed 99 --steps 500000 --every 50000
 """
 
@@ -28,6 +29,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from src.agents.base_agent import BaseTrader
+from src.checkpoints import check_setup, training_setup
 from src.environment.stock_env import StockTradingEnv, TICKERS, normalise_action
 from src.training.train_marl import load_config, set_global_seed
 
@@ -81,7 +83,9 @@ def fmt(v) -> str:
 
 # ── B: checkpoint analysis ──────────────────────────────────────────────────
 
-def analyse_checkpoints(ckpt_dir: str, config: dict):
+def analyse_checkpoints(ckpt_dir: str, config: dict, any_setup: bool = False):
+    if not any_setup:
+        check_setup(ckpt_dir, training_setup(config))
     obs = train_split_obs(config)
     pattern = re.compile(rf"^{AGENT}_step(\d+)\.zip$")
     found = []
@@ -212,6 +216,8 @@ if __name__ == "__main__":
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("checkpoints")
     c.add_argument("ckpt_dir")
+    c.add_argument("--any-setup", action="store_true",
+                   help="skip the training_setup.json check (old checkpoints)")
     q = sub.add_parser("pilot")
     q.add_argument("variant", choices=list(VARIANTS))
     q.add_argument("--seed", type=int, default=99)
@@ -223,7 +229,7 @@ if __name__ == "__main__":
 
     config = load_config()
     if args.cmd == "checkpoints":
-        analyse_checkpoints(args.ckpt_dir, config)
+        analyse_checkpoints(args.ckpt_dir, config, args.any_setup)
     else:
         pilot(args.variant, args.seed, args.steps, args.out_dir, config,
               args.every, args.window)

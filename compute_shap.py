@@ -5,6 +5,7 @@ Saves SHAP values and plots to results/logs/shap/
 """
 
 import os
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -15,6 +16,7 @@ import yaml
 from src.environment.stock_env import StockTradingEnv, TICKERS, PRICE_FEATURES, SENTIMENT_FEATURES
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
+from src.checkpoints import checkpoint_dir, load_checked_agents
 
 # ── config ───────────────────────────────────────────────────────────────────
 
@@ -238,10 +240,11 @@ def save_shap_csv(shap_values: np.ndarray,
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def run_shap_analysis(config: dict,
-                       price_ckpt: str,
-                       sentiment_ckpt: str):
-    """Full SHAP analysis pipeline for both agents."""
+def run_shap_analysis(config: dict, ckpt_dir: str):
+    """
+    Full SHAP analysis pipeline for both agents in ckpt_dir
+    (refused unless trained with the current setup).
+    """
 
     os.makedirs("results/logs/shap", exist_ok=True)
     np.random.seed(42)
@@ -253,15 +256,7 @@ def run_shap_analysis(config: dict,
     price_agent     = PriceAgent(env, config)
     sentiment_agent = SentimentAgent(env, config)
 
-    if os.path.exists(price_ckpt):
-        price_agent.load(price_ckpt)
-    else:
-        print(f"WARNING: {price_ckpt} not found")
-
-    if os.path.exists(sentiment_ckpt):
-        sentiment_agent.load(sentiment_ckpt)
-    else:
-        print(f"WARNING: {sentiment_ckpt} not found")
+    load_checked_agents(ckpt_dir, config, [price_agent, sentiment_agent])
 
     # Collect observations
     print("\nCollecting observations from evaluation episodes...")
@@ -372,9 +367,15 @@ def run_shap_analysis(config: dict,
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SHAP analysis of one training seed")
+    parser.add_argument("--checkpoint-root", type=str, default=None,
+                        help="folder holding the seed{N}/ checkpoint folders; "
+                             "default: paths.checkpoints_root in config.yaml")
+    parser.add_argument("--train-seed", type=int, default=0)
+    args = parser.parse_args()
+
     config = load_config()
     run_shap_analysis(
         config,
-        price_ckpt     = "results/checkpoints/price_agent_final.zip",
-        sentiment_ckpt = "results/checkpoints/sentiment_agent_final.zip",
+        checkpoint_dir(config, args.train_seed, args.checkpoint_root),
     )

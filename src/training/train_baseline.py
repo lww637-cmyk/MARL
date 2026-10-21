@@ -166,9 +166,11 @@ def run_all_baselines(config: dict,
 
 
 if __name__ == "__main__":
+    from src.checkpoints import checkpoint_dir, final_checkpoint
     config = load_config()
+    ckpt_dir = checkpoint_dir(config, seed=0)
     run_all_baselines(
         config,
-        price_ckpt    = "results/checkpoints/price_agent_final.zip",
-        sentiment_ckpt= "results/checkpoints/sentiment_agent_final.zip",
+        price_ckpt    = final_checkpoint(ckpt_dir, "price_agent"),
+        sentiment_ckpt= final_checkpoint(ckpt_dir, "sentiment_agent"),
     )
