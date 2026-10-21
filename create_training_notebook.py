@@ -8,8 +8,8 @@ cells = [
 Trains the price agent and the sentiment agent for **one training seed** (`SEED`, default 0)
 for `training.total_timesteps` steps each (see `config.yaml`).
 
-Checkpoints are saved every `training.save_frequency` steps to `results/checkpoints/seed{SEED}/`
-and copied to `MyDrive/MARL/results/checkpoints_scaled/seed{SEED}/` as soon as each one is written.
+Checkpoints are saved every `training.save_frequency` steps to `results/checkpoints_scaled/seed{SEED}/`
+(`paths.checkpoints_root` in `config.yaml`) together with `training_setup.json`, and copied to `MyDrive/MARL/results/checkpoints_scaled/seed{SEED}/` as soon as each one is written.
 
 **Price-agent fix (TASK5), used by both agents**
 - Price features are standardised with the train-split mean/std in `data/price_scaler.json`
@@ -19,7 +19,9 @@ and copied to `MyDrive/MARL/results/checkpoints_scaled/seed{SEED}/` as soon as e
 - While one agent trains, the other is a fixed partner, `training.partner` in `config.yaml`
   (`neutral` = equal weights, default).
 - Checkpoints from before the fix (the old `checkpoints/seed{SEED}/` folder) are never resumed:
-  training refuses a folder whose `training_setup.json` does not match the current setup.
+  training refuses a folder whose `training_setup.json` does not match the current setup,
+  and evaluation / SHAP refuse to load such a folder too.
+  Download `training_setup.json` together with the `_final.zip` files.
 
 **Before running**
 1. Push the repo (current `config.yaml`, `src/`, `data/price_scaler.json`).
@@ -58,7 +60,7 @@ Train seed 0 first, run the policy check at the end, and stop. Change `SEED` and
                              "(same scaled observations and action mapping as training). "
                              "A per-asset std near 0 means the policy ignores its inputs "
                              "(e.g. a constant uniform allocation)."),
-    nbf.v4.new_code_cell('from stable_baselines3 import PPO\nfrom src.environment.stock_env import normalise_action\n\nenv = StockTradingEnv(config, mode="eval", split="train")\nenv.reset(seed=0)\ncols = TICKERS + ["cash"]\n\nfor agent_id in ["price_agent", "sentiment_agent"]:\n    model = PPO.load(f"results/checkpoints/seed{SEED}/{agent_id}_final.zip")\n    weights = []\n    for i in range(env.n_steps):\n        env.start_idx, env.timestep = i, 0\n        a, _ = model.predict(env.observe(agent_id), deterministic=True)\n        weights.append(normalise_action(a))\n    w = pd.DataFrame(weights, columns=cols)\n    print(f"\\n{agent_id} — allocation over {len(w)} train days")\n    print(pd.DataFrame({"mean": w.mean(), "std": w.std()}).round(3).T.to_string())'),
+    nbf.v4.new_code_cell('from stable_baselines3 import PPO\nfrom src.environment.stock_env import normalise_action\nfrom src.checkpoints import checkpoint_dir, check_setup, training_setup\n\nCKPT = checkpoint_dir(config, SEED)\ncheck_setup(CKPT, training_setup(config))\n\nenv = StockTradingEnv(config, mode="eval", split="train")\nenv.reset(seed=0)\ncols = TICKERS + ["cash"]\n\nfor agent_id in ["price_agent", "sentiment_agent"]:\n    model = PPO.load(f"{CKPT}/{agent_id}_final.zip")\n    weights = []\n    for i in range(env.n_steps):\n        env.start_idx, env.timestep = i, 0\n        a, _ = model.predict(env.observe(agent_id), deterministic=True)\n        weights.append(normalise_action(a))\n    w = pd.DataFrame(weights, columns=cols)\n    print(f"\\n{agent_id} — allocation over {len(w)} train days")\n    print(pd.DataFrame({"mean": w.mean(), "std": w.std()}).round(3).T.to_string())'),
 
     nbf.v4.new_markdown_cell("**Stop here.** Check the policy above before training more seeds. "
                              "For the next seed, set `SEED` in Step 1 and re-run from Step 1."),
