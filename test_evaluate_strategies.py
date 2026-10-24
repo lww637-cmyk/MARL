@@ -87,7 +87,31 @@ except ValueError:
     pass
 print("price-agent-only / sentiment-agent-only OK")
 
-# 4. Full run with --no-llm and --tag: all non-LLM strategies, no Gemini, dash when n=1
+
+class SwitchAgent:
+    """Alternates between two one-hot weights on every predict call."""
+    def __init__(self, a, b):
+        self.options, self.calls = [one_hot(a), one_hot(b)], 0
+
+    def predict(self, obs):
+        self.calls += 1
+        return self.options[(self.calls - 1) % 2]
+
+
+# 4. *-hold20: weights recomputed on steps 0 and 20 only (both even calls),
+#    so the held target is the first weight throughout
+for mode, ref in [("price", "price"), ("sentiment", "sentiment"), ("both", "both")]:
+    expected_run = ev.run_episode(env, price_agent, sentiment_agent, agent_mode=ref)
+    held = ev.run_episode(env, SwitchAgent(0, 2), SwitchAgent(1, 3),
+                          agent_mode=mode, hold_every=ev.LLM_FREQUENCY)
+    daily_run = ev.run_episode(env, SwitchAgent(0, 2), SwitchAgent(1, 3), agent_mode=mode)
+    assert np.isclose(held["final_value"], expected_run["final_value"], rtol=1e-6), mode
+    assert np.isclose(held["turnover"], expected_run["turnover"])
+    assert np.isclose(held["total_cost"], expected_run["total_cost"])
+    assert daily_run["turnover"] > held["turnover"] + 1.0, mode   # switching trades daily
+print("*-hold20 OK")
+
+# 5. Full run with --no-llm and --tag: all non-LLM strategies, no Gemini, dash when n=1
 ev.make_test_env  = lambda config, full_period: StandInEnv(full_period)
 ev.load_agents    = lambda env, config, d: (price_agent, sentiment_agent)
 ev.training_setup = lambda config: {}
@@ -109,7 +133,8 @@ with tempfile.TemporaryDirectory() as d:
         os.chdir(cwd)
 
 expected_strategies = ["buy_and_hold", "equal_weight_daily_rebalanced", "MARL-no-coordinator",
-                       "price-agent-only", "sentiment-agent-only"]
+                       "price-agent-only", "sentiment-agent-only", "MARL-average-hold20",
+                       "price-only-hold20", "sentiment-only-hold20"]
 assert list(summary["strategy"]) == expected_strategies, list(summary["strategy"])
 assert sorted(rob["strategy"]) == sorted(expected_strategies)
 assert "src.coordinator.llm_coordinator" not in sys.modules

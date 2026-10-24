@@ -13,6 +13,11 @@ Primary evaluation:
       sentiment-agent-only          sentiment agent's action alone
       MARL-no-coordinator           average of both agents
       MARL+LLM                      LLM coordinator every 20 steps
+      MARL-average-hold20           average of both agents, recomputed every
+                                    20 steps (coordinator schedule), held
+                                    in between
+      price-only-hold20             price agent, same hold schedule
+      sentiment-only-hold20         sentiment agent, same hold schedule
     The agent strategies are run once per
     training seed ({checkpoint root}/seed{N}/) to report variance
     across training seeds. Each seed folder must hold a
@@ -66,12 +71,18 @@ BUY_AND_HOLD = "buy_and_hold"
 EQUAL_WEIGHT = "equal_weight_daily_rebalanced"
 BENCHMARKS   = {BUY_AND_HOLD: False, EQUAL_WEIGHT: True}
 
-# agent strategy label -> (agent_mode, use_llm)
+# LLM coordinator cadence; the *-hold20 strategies use the same schedule
+LLM_FREQUENCY = 20
+
+# agent strategy label -> (agent_mode, use_llm, hold_every)
 AGENT_STRATEGIES = {
-    "MARL-no-coordinator" : ("both", False),
-    "price-agent-only"    : ("price", False),
-    "sentiment-agent-only": ("sentiment", False),
-    "MARL+LLM"            : ("both", True),
+    "MARL-no-coordinator"  : ("both", False, None),
+    "price-agent-only"     : ("price", False, None),
+    "sentiment-agent-only" : ("sentiment", False, None),
+    "MARL-average-hold20"  : ("both", False, LLM_FREQUENCY),
+    "price-only-hold20"    : ("price", False, LLM_FREQUENCY),
+    "sentiment-only-hold20": ("sentiment", False, LLM_FREQUENCY),
+    "MARL+LLM"             : ("both", True, None),
 }
 
 
@@ -143,7 +154,8 @@ def run_episode(env: StockTradingEnv,
                 config: dict = None,
                 fixed_weights: np.ndarray = None,
                 rebalance: bool = True,
-                agent_mode: str = "both") -> dict:
+                agent_mode: str = "both",
+                hold_every: int = None) -> dict:
     """
     Run one evaluation episode on the window selected by reset_window().
     fixed_weights : if given, ignore agents and trade to these weights.
@@ -151,8 +163,12 @@ def run_episode(env: StockTradingEnv,
                     (equal-weight daily-rebalanced); False buys them once
                     and lets them drift (true buy-and-hold).
     agent_mode    : "both" (average / LLM), "price" or "sentiment" only.
-    LLM coordinator called every 20 steps (monthly cadence), only when
-    agent_mode="both".
+    LLM coordinator called every LLM_FREQUENCY steps (monthly cadence),
+    only when agent_mode="both".
+    hold_every    : without the LLM, recompute the agent target weights
+                    only every hold_every steps (same schedule as the
+                    coordinator) and trade back to that held target in
+                    between. None recomputes every step.
     Adds turnover and total_cost (as charged by the env) to the summary.
     """
     if agent_mode not in ("both", "price", "sentiment"):
@@ -163,9 +179,9 @@ def run_episode(env: StockTradingEnv,
     turnover   = 0.0
     total_cost = 0.0
 
-    cached_llm_weights = None
-    llm_call_counter   = 0
-    LLM_FREQUENCY      = 20
+    cached_llm_weights  = None
+    llm_call_counter    = 0
+    cached_hold_weights = None
 
     # Fix Bug 2: bypass AEC interface — directly control execution
     for step in range(env.episode_length):
@@ -215,6 +231,11 @@ def run_episode(env: StockTradingEnv,
                     else (price_action + sent_action) / 2.0
             else:
                 final_weights = (price_action + sent_action) / 2.0
+
+            if hold_every is not None and not use_llm:
+                if step % hold_every == 0:
+                    cached_hold_weights = final_weights
+                final_weights = cached_hold_weights
 
         # Normalise weights
         final_weights = np.clip(final_weights, 0.0, 1.0)
@@ -294,13 +315,13 @@ def evaluate_test_period(config: dict, dirs: dict,
 
     for train_seed, ckpt_dir in dirs.items():
         price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
-        for label, (mode, llm) in agent_strategies(use_llm).items():
+        for label, (mode, llm, hold) in agent_strategies(use_llm).items():
             summary = run_episode(env, price_agent, sentiment_agent,
                                   use_llm=llm, config=config,
-                                  agent_mode=mode)
+                                  agent_mode=mode, hold_every=hold)
             summary.update(strategy=label, train_seed=train_seed)
             rows.append(summary)
-            _print_row(f"{label:20s} train_seed={train_seed}", summary)
+            _print_row(f"{label:21s} train_seed={train_seed}", summary)
 
     return pd.DataFrame(rows)
 
@@ -312,7 +333,8 @@ def evaluate_multi_seed(ckpt_dir: str,
                         seeds: list = None,
                         use_llm: bool = False,
                         agent_mode: str = "both",
-                        label: str = None) -> pd.DataFrame:
+                        label: str = None,
+                        hold_every: int = None) -> pd.DataFrame:
     """
     Evaluate trained agents on random-start test windows.
     Windows overlap heavily — robustness check only.
@@ -333,7 +355,7 @@ def evaluate_multi_seed(ckpt_dir: str,
         summary = run_episode(
             env, price_agent, sentiment_agent,
             window_seed=seed, use_llm=use_llm, config=config,
-            agent_mode=agent_mode
+            agent_mode=agent_mode, hold_every=hold_every
         )
         summary["seed"]     = seed
         summary["strategy"] = label
@@ -466,10 +488,10 @@ def run_full_evaluation(config: dict,
             buy_and_hold_multi_seed(config, window_seeds, rebalance=rebalance)
             for rebalance in BENCHMARKS.values()
         ]
-        for label, (mode, llm) in agent_strategies(use_llm).items():
+        for label, (mode, llm, hold) in agent_strategies(use_llm).items():
             rob_parts.append(evaluate_multi_seed(
                 ckpt_dir, config, seeds=window_seeds, use_llm=llm,
-                agent_mode=mode, label=label
+                agent_mode=mode, label=label, hold_every=hold
             ))
         rob_df = pd.concat(rob_parts, ignore_index=True)
         rob_df["train_seed"] = train_seeds[0]
