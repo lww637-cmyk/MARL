@@ -31,6 +31,10 @@ Secondary robustness check (--robustness):
 
 --no-llm skips MARL+LLM entirely (no Gemini client, no API calls).
 
+Every coordinator call is appended to {log dir}/coordinator_calls.jsonl
+(seed, step, prompt, raw response, parsed and final weights, outcome,
+token counts), and outcome counts per seed are printed at the end.
+
 Every row reports turnover (sum of |weight change| over the episode,
 including the initial buy from cash) and total_cost (transaction costs
 paid, in currency), both as charged by StockTradingEnv. Std columns are
@@ -44,6 +48,8 @@ import numpy as np
 import pandas as pd
 import yaml
 import os
+import json
+from collections import Counter
 from src.environment.stock_env import StockTradingEnv, TICKERS, N_TICKERS
 from src.agents.price_agent import PriceAgent
 from src.agents.sentiment_agent import SentimentAgent
@@ -131,6 +137,36 @@ def reset_window(env: StockTradingEnv, window_seed: int = None):
     env.mode = "eval"
 
 
+class CallLog:
+    """
+    Coordinator calls, one JSON line each, written as they happen so a
+    run that stops part-way keeps the calls already paid for.
+    """
+    def __init__(self, path: str):
+        self.path    = path
+        self.records = []
+        open(path, "w").close()
+
+    def write(self, record: dict):
+        self.records.append(record)
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+    def print_outcomes(self):
+        """Outcome counts per (phase, seed)."""
+        print("\n" + "="*65)
+        print(f"COORDINATOR CALL OUTCOMES ({self.path})")
+        print("="*65)
+        counts = {}
+        for r in self.records:
+            counts.setdefault((r["phase"], r["seed"]), Counter())[r["outcome"]] += 1
+        if not counts:
+            print("  no coordinator calls")
+        for (phase, seed), c in counts.items():
+            parts = ", ".join(f"{k}={v}" for k, v in sorted(c.items()))
+            print(f"  {phase:11s} seed={seed} | calls={sum(c.values()):4d} | {parts}")
+
+
 def agent_strategies(use_llm: bool) -> dict:
     """AGENT_STRATEGIES, without MARL+LLM when use_llm is False."""
     return {k: v for k, v in AGENT_STRATEGIES.items() if use_llm or not v[1]}
@@ -155,7 +191,8 @@ def run_episode(env: StockTradingEnv,
                 fixed_weights: np.ndarray = None,
                 rebalance: bool = True,
                 agent_mode: str = "both",
-                hold_every: int = None) -> dict:
+                hold_every: int = None,
+                on_call=None) -> dict:
     """
     Run one evaluation episode on the window selected by reset_window().
     fixed_weights : if given, ignore agents and trade to these weights.
@@ -169,6 +206,8 @@ def run_episode(env: StockTradingEnv,
                     only every hold_every steps (same schedule as the
                     coordinator) and trade back to that held target in
                     between. None recomputes every step.
+    on_call       : called with each coordinator call's record (step,
+                    date, prompt, response, weights, outcome, tokens).
     Adds turnover and total_cost (as charged by the env) to the summary.
     """
     if agent_mode not in ("both", "price", "sentiment"):
@@ -219,10 +258,14 @@ def run_episode(env: StockTradingEnv,
                         "timestep"       : env.timestep,
                         "recent_returns" : env.returns_history[-10:],
                     }
+                    record = {"step": env.timestep,
+                              "date": str(env.common_dates[date_idx].date())}
                     cached_llm_weights = coordinate_or_average(
                         price_action, sent_action,
-                        context, config, use_llm=True
+                        context, config, use_llm=True, record=record
                     )
+                    if on_call is not None:
+                        on_call(record)
                     #time.sleep(1)
                 llm_call_counter += 1
 
@@ -290,15 +333,24 @@ def _print_row(prefix: str, summary: dict):
           f"Cost: {summary['total_cost']:9.2f}")
 
 
+def _tagged(call_log: CallLog, **tags):
+    """on_call hook writing each record to call_log with tags first."""
+    if call_log is None:
+        return None
+    return lambda record: call_log.write({**tags, **record})
+
+
 # ── primary: one fixed full-test-period episode ──────────────────────────────
 
 def evaluate_test_period(config: dict, dirs: dict,
-                         use_llm: bool = True) -> pd.DataFrame:
+                         use_llm: bool = True,
+                         call_log: CallLog = None) -> pd.DataFrame:
     """
     One full-test-period episode per strategy, same window for all.
     Agent strategies are repeated per training seed (dirs maps
     train_seed -> checkpoint folder); the two benchmarks are deterministic
     so they run once. use_llm=False skips MARL+LLM.
+    Coordinator calls go to call_log, tagged with the training seed.
     """
     env = make_test_env(config, full_period=True)
     print(f"\nFixed test-period episode: "
@@ -318,7 +370,10 @@ def evaluate_test_period(config: dict, dirs: dict,
         for label, (mode, llm, hold) in agent_strategies(use_llm).items():
             summary = run_episode(env, price_agent, sentiment_agent,
                                   use_llm=llm, config=config,
-                                  agent_mode=mode, hold_every=hold)
+                                  agent_mode=mode, hold_every=hold,
+                                  on_call=_tagged(call_log, phase="test_period",
+                                                  seed=train_seed,
+                                                  strategy=label))
             summary.update(strategy=label, train_seed=train_seed)
             rows.append(summary)
             _print_row(f"{label:21s} train_seed={train_seed}", summary)
@@ -334,10 +389,13 @@ def evaluate_multi_seed(ckpt_dir: str,
                         use_llm: bool = False,
                         agent_mode: str = "both",
                         label: str = None,
-                        hold_every: int = None) -> pd.DataFrame:
+                        hold_every: int = None,
+                        call_log: CallLog = None,
+                        train_seed: int = None) -> pd.DataFrame:
     """
     Evaluate trained agents on random-start test windows.
     Windows overlap heavily — robustness check only.
+    Coordinator calls go to call_log, tagged with train_seed and window.
     """
     if seeds is None:
         seeds = list(range(10))
@@ -355,7 +413,9 @@ def evaluate_multi_seed(ckpt_dir: str,
         summary = run_episode(
             env, price_agent, sentiment_agent,
             window_seed=seed, use_llm=use_llm, config=config,
-            agent_mode=agent_mode, hold_every=hold_every
+            agent_mode=agent_mode, hold_every=hold_every,
+            on_call=_tagged(call_log, phase="robustness", seed=train_seed,
+                            window_seed=seed, strategy=label)
         )
         summary["seed"]     = seed
         summary["strategy"] = label
@@ -457,7 +517,8 @@ def run_full_evaluation(config: dict,
     Checkpoints: {checkpoint_root or paths.checkpoints_root}/seed{N}/.
     Every seed folder is checked against the current setup before anything runs.
     use_llm=False skips every MARL+LLM run, so Gemini is never called.
-    Save results to results/logs/, or results/logs/{tag}/ when tag is given
+    Save results to results/logs/, or results/logs/{tag}/ when tag is given;
+    with use_llm, coordinator calls go to coordinator_calls.jsonl there.
     """
     if train_seeds is None:
         train_seeds = DEFAULT_TRAIN_SEEDS
@@ -472,8 +533,9 @@ def run_full_evaluation(config: dict,
 
     log_dir = os.path.join("results", "logs", tag) if tag else os.path.join("results", "logs")
     os.makedirs(log_dir, exist_ok=True)
+    call_log = CallLog(os.path.join(log_dir, "coordinator_calls.jsonl")) if use_llm else None
 
-    test_df = evaluate_test_period(config, dirs, use_llm=use_llm)
+    test_df = evaluate_test_period(config, dirs, use_llm=use_llm, call_log=call_log)
     test_df.to_csv(os.path.join(log_dir, "test_period_results.csv"), index=False)
     print(f"\nSaved → {os.path.join(log_dir, 'test_period_results.csv')}")
     print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
@@ -491,7 +553,8 @@ def run_full_evaluation(config: dict,
         for label, (mode, llm, hold) in agent_strategies(use_llm).items():
             rob_parts.append(evaluate_multi_seed(
                 ckpt_dir, config, seeds=window_seeds, use_llm=llm,
-                agent_mode=mode, label=label, hold_every=hold
+                agent_mode=mode, label=label, hold_every=hold,
+                call_log=call_log, train_seed=train_seeds[0]
             ))
         rob_df = pd.concat(rob_parts, ignore_index=True)
         rob_df["train_seed"] = train_seeds[0]
@@ -509,6 +572,9 @@ def run_full_evaluation(config: dict,
     print("FINAL COMPARISON TABLE (fixed test period)")
     print("="*65)
     print(test_summary.to_string(index=False))
+
+    if call_log is not None:
+        call_log.print_outcomes()
 
     return test_df, test_summary
 
