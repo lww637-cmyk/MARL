@@ -1,0 +1,13 @@
+{
+  "call_frequency": 20,
+  "call_frequency_source": "config.yaml coordinator.call_frequency",
+  "use_llm": true,
+  "train_seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ]
+}

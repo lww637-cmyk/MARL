@@ -18,6 +18,11 @@ Primary evaluation:
                                     in between
       price-only-hold20             price agent, same hold schedule
       sentiment-only-hold20         sentiment agent, same hold schedule
+      MARL-average-hold20-cash{3,5.5,8}
+                                    MARL-average-hold20 with a fixed cash
+                                    tilt c = 0.03 / 0.055 / 0.08: at each
+                                    rebalance the averaged stock weights are
+                                    scaled by (1 - c) and c is added to cash
     The agent strategies are run once per
     training seed ({checkpoint root}/seed{N}/) to report variance
     across training seeds. Each seed folder must hold a
@@ -86,15 +91,20 @@ BENCHMARKS   = {BUY_AND_HOLD: False, EQUAL_WEIGHT: True}
 # (20 trading days, about one calendar month)
 DEFAULT_CALL_FREQUENCY = 20
 
-# agent strategy label -> (agent_mode, use_llm, held on the coordinator schedule)
+# agent strategy label -> (agent_mode, use_llm, held on the coordinator
+# schedule, cash tilt added at each rebalance or None)
 AGENT_STRATEGIES = {
-    "MARL-no-coordinator"  : ("both", False, False),
-    "price-agent-only"     : ("price", False, False),
-    "sentiment-agent-only" : ("sentiment", False, False),
-    "MARL-average-hold20"  : ("both", False, True),
-    "price-only-hold20"    : ("price", False, True),
-    "sentiment-only-hold20": ("sentiment", False, True),
-    "MARL+LLM"             : ("both", True, False),
+    "MARL-no-coordinator"       : ("both", False, False, None),
+    "price-agent-only"          : ("price", False, False, None),
+    "sentiment-agent-only"      : ("sentiment", False, False, None),
+    "MARL-average-hold20"       : ("both", False, True, None),
+    "price-only-hold20"         : ("price", False, True, None),
+    "sentiment-only-hold20"     : ("sentiment", False, True, None),
+    # fixed cash tilts, set a priori (not tuned on results); all reported
+    "MARL-average-hold20-cash3"  : ("both", False, True, 0.03),
+    "MARL-average-hold20-cash5.5": ("both", False, True, 0.055),
+    "MARL-average-hold20-cash8"  : ("both", False, True, 0.08),
+    "MARL+LLM"                  : ("both", True, False, None),
 }
 
 
@@ -182,13 +192,22 @@ class CallLog:
 
 def agent_strategies(use_llm: bool, frequency: int) -> dict:
     """
-    label -> (agent_mode, use_llm, hold_every) from AGENT_STRATEGIES, with
-    the held strategies on the coordinator schedule (every frequency steps).
-    MARL+LLM is left out when use_llm is False.
+    label -> (agent_mode, use_llm, hold_every, cash_tilt) from
+    AGENT_STRATEGIES, with the held strategies on the coordinator schedule
+    (every frequency steps). MARL+LLM is left out when use_llm is False.
     """
-    return {k: (mode, llm, frequency if hold else None)
-            for k, (mode, llm, hold) in AGENT_STRATEGIES.items()
+    return {k: (mode, llm, frequency if hold else None, tilt)
+            for k, (mode, llm, hold, tilt) in AGENT_STRATEGIES.items()
             if use_llm or not llm}
+
+
+def tilt_to_cash(weights: np.ndarray, c: float) -> np.ndarray:
+    """Normalised weights with every stock scaled by (1 - c) and c added to cash."""
+    w = np.clip(weights, 0.0, 1.0)
+    w = w / (w.sum() + 1e-8)
+    w[:N_TICKERS] *= 1.0 - c
+    w[-1] += c
+    return w
 
 
 def _ticker_returns(env: StockTradingEnv, idx: int) -> np.ndarray:
@@ -211,6 +230,7 @@ def run_episode(env: StockTradingEnv,
                 rebalance: bool = True,
                 agent_mode: str = "both",
                 hold_every: int = None,
+                cash_tilt: float = None,
                 on_call=None) -> dict:
     """
     Run one evaluation episode on the window selected by reset_window().
@@ -225,12 +245,16 @@ def run_episode(env: StockTradingEnv,
                     only every hold_every steps (same schedule as the
                     coordinator) and trade back to that held target in
                     between. None recomputes every step.
+    cash_tilt     : with hold_every, at each recompute scale the stock
+                    weights by (1 - cash_tilt) and add cash_tilt to cash.
     on_call       : called with each coordinator call's record (step,
                     date, prompt, response, weights, outcome, tokens).
     Adds turnover and total_cost (as charged by the env) to the summary.
     """
     if agent_mode not in ("both", "price", "sentiment"):
         raise ValueError(f"agent_mode must be both/price/sentiment, got {agent_mode!r}")
+    if cash_tilt is not None and (hold_every is None or use_llm):
+        raise ValueError("cash_tilt needs hold_every and no LLM")
     reset_window(env, window_seed)
 
     held       = None   # drifted buy-and-hold weights after the first buy
@@ -296,7 +320,7 @@ def run_episode(env: StockTradingEnv,
 
             if hold_every is not None and not use_llm:
                 if step % hold_every == 0:
-                    cached_hold_weights = final_weights
+                    cached_hold_weights = final_weights if cash_tilt is None                         else tilt_to_cash(final_weights, cash_tilt)
                 final_weights = cached_hold_weights
 
         # Normalise weights
@@ -386,10 +410,11 @@ def evaluate_test_period(config: dict, dirs: dict,
 
     for train_seed, ckpt_dir in dirs.items():
         price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
-        for label, (mode, llm, hold) in agent_strategies(use_llm, call_frequency(config)).items():
+        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, call_frequency(config)).items():
             summary = run_episode(env, price_agent, sentiment_agent,
                                   use_llm=llm, config=config,
                                   agent_mode=mode, hold_every=hold,
+                                  cash_tilt=tilt,
                                   on_call=_tagged(call_log, phase="test_period",
                                                   seed=train_seed,
                                                   strategy=label))
@@ -409,6 +434,7 @@ def evaluate_multi_seed(ckpt_dir: str,
                         agent_mode: str = "both",
                         label: str = None,
                         hold_every: int = None,
+                        cash_tilt: float = None,
                         call_log: CallLog = None,
                         train_seed: int = None) -> pd.DataFrame:
     """
@@ -433,6 +459,7 @@ def evaluate_multi_seed(ckpt_dir: str,
             env, price_agent, sentiment_agent,
             window_seed=seed, use_llm=use_llm, config=config,
             agent_mode=agent_mode, hold_every=hold_every,
+            cash_tilt=cash_tilt,
             on_call=_tagged(call_log, phase="robustness", seed=train_seed,
                             window_seed=seed, strategy=label)
         )
@@ -581,10 +608,11 @@ def run_full_evaluation(config: dict,
             buy_and_hold_multi_seed(config, window_seeds, rebalance=rebalance)
             for rebalance in BENCHMARKS.values()
         ]
-        for label, (mode, llm, hold) in agent_strategies(use_llm, call_frequency(config)).items():
+        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, call_frequency(config)).items():
             rob_parts.append(evaluate_multi_seed(
                 ckpt_dir, config, seeds=window_seeds, use_llm=llm,
                 agent_mode=mode, label=label, hold_every=hold,
+                cash_tilt=tilt,
                 call_log=call_log, train_seed=train_seeds[0]
             ))
         rob_df = pd.concat(rob_parts, ignore_index=True)

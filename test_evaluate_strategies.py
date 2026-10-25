@@ -112,6 +112,24 @@ for mode, ref in [("price", "price"), ("sentiment", "sentiment"), ("both", "both
     assert daily_run["turnover"] > held["turnover"] + 1.0, mode   # switching trades daily
 print("*-hold20 OK")
 
+# 4b. Cash tilt: held average with stocks scaled by (1 - c) and c added to
+#     cash, i.e. the same as daily rebalancing to those fixed weights
+for c in (0.03, 0.055, 0.08):
+    tilted = ev.run_episode(env, price_agent, sentiment_agent, agent_mode="both",
+                            hold_every=ev.DEFAULT_CALL_FREQUENCY, cash_tilt=c)
+    target = (0.5 * (one_hot(0) + one_hot(1))).astype(np.float64)
+    target[:len(TICKERS)] *= 1 - c
+    target[-1] += c
+    fixed = ev.run_episode(env, fixed_weights=target, rebalance=True)
+    assert np.isclose(tilted["final_value"], fixed["final_value"], rtol=1e-6), c
+    assert np.isclose(tilted["turnover"], 2.0 * (1 - c), rtol=1e-6), c
+try:
+    ev.run_episode(env, price_agent, sentiment_agent, agent_mode="both", cash_tilt=0.03)
+    raise AssertionError("cash_tilt without hold_every accepted")
+except ValueError:
+    pass
+print("*-hold20-cash OK")
+
 # 5. Full run with --no-llm and --tag: all non-LLM strategies, no Gemini, dash when n=1
 ev.make_test_env  = lambda config, full_period: StandInEnv(full_period)
 ev.load_agents    = lambda env, config, d: (price_agent, sentiment_agent)
@@ -140,7 +158,9 @@ with tempfile.TemporaryDirectory() as d:
 
 expected_strategies = ["buy_and_hold", "equal_weight_daily_rebalanced", "MARL-no-coordinator",
                        "price-agent-only", "sentiment-agent-only", "MARL-average-hold20",
-                       "price-only-hold20", "sentiment-only-hold20"]
+                       "price-only-hold20", "sentiment-only-hold20",
+                       "MARL-average-hold20-cash3", "MARL-average-hold20-cash5.5",
+                       "MARL-average-hold20-cash8"]
 assert list(summary["strategy"]) == expected_strategies, list(summary["strategy"])
 assert sorted(rob["strategy"]) == sorted(expected_strategies)
 assert "src.coordinator.llm_coordinator" not in sys.modules
@@ -160,7 +180,12 @@ assert ev.call_frequency({"coordinator": {"call_frequency": 7}}) == 7
 held = {k: v[2] for k, v in ev.agent_strategies(False, 7).items()}
 assert held == {"MARL-no-coordinator": None, "price-agent-only": None,
                 "sentiment-agent-only": None, "MARL-average-hold20": 7,
-                "price-only-hold20": 7, "sentiment-only-hold20": 7}, held
+                "price-only-hold20": 7, "sentiment-only-hold20": 7,
+                "MARL-average-hold20-cash3": 7, "MARL-average-hold20-cash5.5": 7,
+                "MARL-average-hold20-cash8": 7}, held
+tilts = {k: v[3] for k, v in ev.agent_strategies(False, 7).items() if v[3] is not None}
+assert tilts == {"MARL-average-hold20-cash3": 0.03, "MARL-average-hold20-cash5.5": 0.055,
+                 "MARL-average-hold20-cash8": 0.08}, tilts
 assert "MARL+LLM" in ev.agent_strategies(True, 7)
 assert ev.call_frequency(ev.load_config()) == 20      # config.yaml matches the runs so far
 print("call_frequency from config OK")
