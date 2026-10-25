@@ -1,4 +1,5 @@
 """Stand-in check of evaluate_agents strategies: synthetic prices, fake agents, no data, checkpoints or Gemini."""
+import json
 import os
 import sys
 import tempfile
@@ -103,7 +104,7 @@ class SwitchAgent:
 for mode, ref in [("price", "price"), ("sentiment", "sentiment"), ("both", "both")]:
     expected_run = ev.run_episode(env, price_agent, sentiment_agent, agent_mode=ref)
     held = ev.run_episode(env, SwitchAgent(0, 2), SwitchAgent(1, 3),
-                          agent_mode=mode, hold_every=ev.LLM_FREQUENCY)
+                          agent_mode=mode, hold_every=ev.DEFAULT_CALL_FREQUENCY)
     daily_run = ev.run_episode(env, SwitchAgent(0, 2), SwitchAgent(1, 3), agent_mode=mode)
     assert np.isclose(held["final_value"], expected_run["final_value"], rtol=1e-6), mode
     assert np.isclose(held["turnover"], expected_run["turnover"])
@@ -126,7 +127,12 @@ with tempfile.TemporaryDirectory() as d:
         out = os.path.join("results", "logs", "standin")
         assert sorted(os.listdir(out)) == sorted([
             "test_period_results.csv", "test_period_summary.csv",
-            "robustness_windows_results.csv", "robustness_windows_summary.csv"])
+            "robustness_windows_results.csv", "robustness_windows_summary.csv",
+            "run_metadata.json"])
+        with open(os.path.join(out, "run_metadata.json")) as f:
+            meta = json.load(f)
+        assert meta["call_frequency"] == ev.DEFAULT_CALL_FREQUENCY, meta
+        assert meta["call_frequency_source"] == "DEFAULT_CALL_FREQUENCY fallback", meta
         saved = pd.read_csv(os.path.join(out, "test_period_summary.csv"))
         rob   = pd.read_csv(os.path.join(out, "robustness_windows_summary.csv"))
     finally:
@@ -147,4 +153,15 @@ assert (s.loc[["buy_and_hold", "equal_weight_daily_rebalanced"], std_cols] == "-
 assert saved[std_cols].notna().all().all()          # no NaN anywhere, "-" instead
 assert rob[std_cols].notna().all().all()            # n=3 windows -> numbers
 print("run_full_evaluation --no-llm --tag OK")
+
+# 6. Cadence comes from coordinator.call_frequency, fallback only when missing
+assert ev.call_frequency({}) == ev.DEFAULT_CALL_FREQUENCY
+assert ev.call_frequency({"coordinator": {"call_frequency": 7}}) == 7
+held = {k: v[2] for k, v in ev.agent_strategies(False, 7).items()}
+assert held == {"MARL-no-coordinator": None, "price-agent-only": None,
+                "sentiment-agent-only": None, "MARL-average-hold20": 7,
+                "price-only-hold20": 7, "sentiment-only-hold20": 7}, held
+assert "MARL+LLM" in ev.agent_strategies(True, 7)
+assert ev.call_frequency(ev.load_config()) == 20      # config.yaml matches the runs so far
+print("call_frequency from config OK")
 print(summary.to_string(index=False))

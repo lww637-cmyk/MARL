@@ -12,9 +12,9 @@ Primary evaluation:
       price-agent-only              price agent's action alone
       sentiment-agent-only          sentiment agent's action alone
       MARL-no-coordinator           average of both agents
-      MARL+LLM                      LLM coordinator every 20 steps
+      MARL+LLM                      LLM coordinator every N steps
       MARL-average-hold20           average of both agents, recomputed every
-                                    20 steps (coordinator schedule), held
+                                    N steps (coordinator schedule), held
                                     in between
       price-only-hold20             price agent, same hold schedule
       sentiment-only-hold20         sentiment agent, same hold schedule
@@ -22,6 +22,11 @@ Primary evaluation:
     training seed ({checkpoint root}/seed{N}/) to report variance
     across training seeds. Each seed folder must hold a
     training_setup.json matching the current setup, or it is refused.
+
+N is coordinator.call_frequency in config.yaml (DEFAULT_CALL_FREQUENCY if
+missing). It drives both MARL+LLM and the *-hold20 controls; the "hold20"
+labels are kept as-is so existing result files stay comparable. The value
+used is written to {log dir}/run_metadata.json.
 
 Secondary robustness check (--robustness):
     Random-start windows of config episode_length inside the test split.
@@ -77,19 +82,27 @@ BUY_AND_HOLD = "buy_and_hold"
 EQUAL_WEIGHT = "equal_weight_daily_rebalanced"
 BENCHMARKS   = {BUY_AND_HOLD: False, EQUAL_WEIGHT: True}
 
-# LLM coordinator cadence; the *-hold20 strategies use the same schedule
-LLM_FREQUENCY = 20
+# Fallback only, used when config.yaml has no coordinator.call_frequency
+# (20 trading days, about one calendar month)
+DEFAULT_CALL_FREQUENCY = 20
 
-# agent strategy label -> (agent_mode, use_llm, hold_every)
+# agent strategy label -> (agent_mode, use_llm, held on the coordinator schedule)
 AGENT_STRATEGIES = {
-    "MARL-no-coordinator"  : ("both", False, None),
-    "price-agent-only"     : ("price", False, None),
-    "sentiment-agent-only" : ("sentiment", False, None),
-    "MARL-average-hold20"  : ("both", False, LLM_FREQUENCY),
-    "price-only-hold20"    : ("price", False, LLM_FREQUENCY),
-    "sentiment-only-hold20": ("sentiment", False, LLM_FREQUENCY),
-    "MARL+LLM"             : ("both", True, None),
+    "MARL-no-coordinator"  : ("both", False, False),
+    "price-agent-only"     : ("price", False, False),
+    "sentiment-agent-only" : ("sentiment", False, False),
+    "MARL-average-hold20"  : ("both", False, True),
+    "price-only-hold20"    : ("price", False, True),
+    "sentiment-only-hold20": ("sentiment", False, True),
+    "MARL+LLM"             : ("both", True, False),
 }
+
+
+def call_frequency(config: dict) -> int:
+    """Coordinator cadence in trading days: coordinator.call_frequency,
+    else DEFAULT_CALL_FREQUENCY."""
+    freq = (config or {}).get("coordinator", {}).get("call_frequency")
+    return DEFAULT_CALL_FREQUENCY if freq is None else int(freq)
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -167,9 +180,15 @@ class CallLog:
             print(f"  {phase:11s} seed={seed} | calls={sum(c.values()):4d} | {parts}")
 
 
-def agent_strategies(use_llm: bool) -> dict:
-    """AGENT_STRATEGIES, without MARL+LLM when use_llm is False."""
-    return {k: v for k, v in AGENT_STRATEGIES.items() if use_llm or not v[1]}
+def agent_strategies(use_llm: bool, frequency: int) -> dict:
+    """
+    label -> (agent_mode, use_llm, hold_every) from AGENT_STRATEGIES, with
+    the held strategies on the coordinator schedule (every frequency steps).
+    MARL+LLM is left out when use_llm is False.
+    """
+    return {k: (mode, llm, frequency if hold else None)
+            for k, (mode, llm, hold) in AGENT_STRATEGIES.items()
+            if use_llm or not llm}
 
 
 def _ticker_returns(env: StockTradingEnv, idx: int) -> np.ndarray:
@@ -200,8 +219,8 @@ def run_episode(env: StockTradingEnv,
                     (equal-weight daily-rebalanced); False buys them once
                     and lets them drift (true buy-and-hold).
     agent_mode    : "both" (average / LLM), "price" or "sentiment" only.
-    LLM coordinator called every LLM_FREQUENCY steps (monthly cadence),
-    only when agent_mode="both".
+    LLM coordinator called every call_frequency(config) steps, only when
+    agent_mode="both".
     hold_every    : without the LLM, recompute the agent target weights
                     only every hold_every steps (same schedule as the
                     coordinator) and trade back to that held target in
@@ -250,8 +269,8 @@ def run_episode(env: StockTradingEnv,
             elif use_llm and config is not None:
                 # imported here so --no-llm never creates the Gemini client
                 from src.coordinator.llm_coordinator import coordinate_or_average
-                # Call LLM every LLM_FREQUENCY steps
-                if llm_call_counter % LLM_FREQUENCY == 0:
+                # Call LLM every call_frequency(config) steps
+                if llm_call_counter % call_frequency(config) == 0:
                     context = {
                         "portfolio_value": env.portfolio_value,
                         "initial_capital": env.initial_capital,
@@ -367,7 +386,7 @@ def evaluate_test_period(config: dict, dirs: dict,
 
     for train_seed, ckpt_dir in dirs.items():
         price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
-        for label, (mode, llm, hold) in agent_strategies(use_llm).items():
+        for label, (mode, llm, hold) in agent_strategies(use_llm, call_frequency(config)).items():
             summary = run_episode(env, price_agent, sentiment_agent,
                                   use_llm=llm, config=config,
                                   agent_mode=mode, hold_every=hold,
@@ -544,13 +563,25 @@ def run_full_evaluation(config: dict,
     test_summary.to_csv(os.path.join(log_dir, "test_period_summary.csv"), index=False)
     print(f"Saved → {os.path.join(log_dir, 'test_period_summary.csv')}")
 
+    # record the cadence this folder was produced with
+    metadata = {"call_frequency": call_frequency(config),
+                "call_frequency_source": "config.yaml coordinator.call_frequency"
+                    if config.get("coordinator", {}).get("call_frequency") is not None
+                    else "DEFAULT_CALL_FREQUENCY fallback",
+                "use_llm": use_llm,
+                "train_seeds": list(train_seeds)}
+    with open(os.path.join(log_dir, "run_metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"Saved → {os.path.join(log_dir, 'run_metadata.json')} "
+          f"(call_frequency={metadata['call_frequency']})")
+
     if robustness:
         ckpt_dir = dirs[train_seeds[0]]
         rob_parts = [
             buy_and_hold_multi_seed(config, window_seeds, rebalance=rebalance)
             for rebalance in BENCHMARKS.values()
         ]
-        for label, (mode, llm, hold) in agent_strategies(use_llm).items():
+        for label, (mode, llm, hold) in agent_strategies(use_llm, call_frequency(config)).items():
             rob_parts.append(evaluate_multi_seed(
                 ckpt_dir, config, seeds=window_seeds, use_llm=llm,
                 agent_mode=mode, label=label, hold_every=hold,

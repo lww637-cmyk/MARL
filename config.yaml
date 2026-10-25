@@ -41,7 +41,7 @@ coordinator:
   model: "gemini-3.8-flash"
   temperature: 0.2
   max_tokens: 2048
-  call_frequency: 5 # call LLM every N trading days (weekly cadence)
+  call_frequency: 20 # call LLM every N trading days (20 = about one calendar month); the *-hold20 controls use the same N
 
 training:
   total_timesteps: 2000000
