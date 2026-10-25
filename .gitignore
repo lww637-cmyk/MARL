@@ -12,3 +12,5 @@ __pycache__/
 *.pth
 mlruns/
 mlflow.db
+TASK*.md
+UPDATE.md
