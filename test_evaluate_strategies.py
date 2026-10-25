@@ -139,16 +139,19 @@ cwd = os.getcwd()
 with tempfile.TemporaryDirectory() as d:
     os.chdir(d)
     try:
-        df, summary = ev.run_full_evaluation({}, train_seeds=[0, 1], robustness=True,
+        df, summary = ev.run_full_evaluation({"environment": {"transaction_cost": COST}},
+                                             train_seeds=[0, 1], robustness=True,
                                              window_seeds=[0, 1, 2], checkpoint_root="x",
                                              use_llm=False, tag="standin")
         out = os.path.join("results", "logs", "standin")
         assert sorted(os.listdir(out)) == sorted([
             "test_period_results.csv", "test_period_summary.csv",
             "robustness_windows_results.csv", "robustness_windows_summary.csv",
-            "run_metadata.json"])
+            "run_metadata.json", "equity_curves.csv"])
         with open(os.path.join(out, "run_metadata.json")) as f:
             meta = json.load(f)
+        assert meta["cost_rate"] == COST, meta
+        curves = pd.read_csv(os.path.join(out, "equity_curves.csv"))
         assert meta["call_frequency"] == ev.DEFAULT_CALL_FREQUENCY, meta
         assert meta["call_frequency_source"] == "DEFAULT_CALL_FREQUENCY fallback", meta
         saved = pd.read_csv(os.path.join(out, "test_period_summary.csv"))
@@ -172,7 +175,22 @@ s = saved.set_index("strategy")
 assert (s.loc[["buy_and_hold", "equal_weight_daily_rebalanced"], std_cols] == "-").all().all()
 assert saved[std_cols].notna().all().all()          # no NaN anywhere, "-" instead
 assert rob[std_cols].notna().all().all()            # n=3 windows -> numbers
+# one equity curve per primary episode, initial capital first, matching the row
+assert len(curves.groupby(["strategy", "train_seed"], dropna=False)) == len(df)
+for (strategy, seed), c in curves.groupby(["strategy", "train_seed"], dropna=False):
+    row = df[(df["strategy"] == strategy) & (df["train_seed"].isna() if pd.isna(seed)
+                                             else df["train_seed"] == seed)].iloc[0]
+    assert c["portfolio_value"].iloc[0] == CAPITAL and len(c) == row["n_steps"] + 1
+    assert np.isclose(c["portfolio_value"].iloc[-1], row["final_value"])
+    assert np.isclose(ev.true_max_drawdown(c["portfolio_value"]), row["max_drawdown_true"])
+assert {"mean_drawdown_true", "std_drawdown_true"} <= set(summary.columns)
 print("run_full_evaluation --no-llm --tag OK")
+
+# 5b. max_drawdown_true is peak-to-trough; the env's max_drawdown ignores order
+assert np.isclose(ev.true_max_drawdown([100, 200, 150, 300, 250]), 0.25)
+assert ev.true_max_drawdown([100, 110, 120]) == 0.0
+assert np.isclose(ev.true_max_drawdown([100, 50, 200]), 0.5)
+print("max_drawdown_true OK")
 
 # 6. Cadence comes from coordinator.call_frequency, fallback only when missing
 assert ev.call_frequency({}) == ev.DEFAULT_CALL_FREQUENCY

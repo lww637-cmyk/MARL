@@ -13,7 +13,8 @@ import src.coordinator.llm_coordinator as llm
 import evaluate_agents as ev
 from src.environment.stock_env import StockTradingEnv, TICKERS, ACTION_SIZE
 
-CONFIG = {"coordinator": {"model": "fake-model", "temperature": 0.0, "max_tokens": 64}}
+CONFIG = {"coordinator": {"model": "fake-model", "temperature": 0.0, "max_tokens": 64},
+          "environment": {"transaction_cost": 0.001}}   # same rate as StandInEnv
 
 
 class FakeUsage:

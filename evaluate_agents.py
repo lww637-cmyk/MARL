@@ -1,7 +1,9 @@
 import time
 
 """
-Evaluation script for trained MARL agents. Test split only (>= 2022-07-01).
+Evaluation script for trained MARL agents. Test split (>= 2022-07-01) by
+default; --period train runs the same fixed full-period episode on the
+TRAINING split (<= 2022-06-30, the split policy_check.py uses) instead.
 
 Primary evaluation:
     ONE fixed episode covering the full test period, identical for
@@ -50,6 +52,11 @@ Secondary robustness check (--robustness):
 
 --no-llm skips MARL+LLM entirely (no Gemini client, no API calls).
 
+--period train (requires --no-llm, no --robustness): every non-LLM strategy
+and both benchmarks, one full-train-period episode per training seed, written
+to train_period_results.csv / train_period_summary.csv. The agents were
+trained on this split, so it is an in-sample reference, not an evaluation.
+
 Every coordinator call is appended to {log dir}/coordinator_calls.jsonl
 (seed, step, prompt, raw response, parsed and final weights, outcome,
 token counts), and outcome counts per seed are printed at the end.
@@ -58,6 +65,14 @@ Every row reports turnover (sum of |weight change| over the episode,
 including the initial buy from cash) and total_cost (transaction costs
 paid, in currency), both as charged by StockTradingEnv. Std columns are
 "-" when a strategy has a single run (n=1).
+
+max_drawdown is StockTradingEnv's (max value - min value) / max value, which
+ignores the order of the two and so is NOT a peak-to-trough drawdown; it is
+kept unchanged for comparability. max_drawdown_true is the real one:
+max over t of (running max - value_t) / running max, on the daily portfolio
+values including the initial capital. Those daily values of every
+full-period episode are written to {log dir}/equity_curves.csv
+(strategy, train_seed, step, date, portfolio_value).
 
 Run this after downloading checkpoints from Colab.
 """
@@ -131,12 +146,19 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 DEFAULT_TRAIN_SEEDS = [0, 1, 2]
+PERIODS = ("test", "train")
 
 
 def make_test_env(config: dict, full_period: bool) -> StockTradingEnv:
     """Evaluation env restricted to the test split."""
     return StockTradingEnv(config, mode="eval", split="test",
                            full_period=full_period)
+
+
+def make_train_env(config: dict) -> StockTradingEnv:
+    """Evaluation env spanning the whole training split (--period train)."""
+    return StockTradingEnv(config, mode="eval", split="train",
+                           full_period=True)
 
 
 def load_agents(env: StockTradingEnv, config: dict, ckpt_dir: str) -> tuple:
@@ -230,6 +252,24 @@ def _ticker_returns(env: StockTradingEnv, idx: int) -> np.ndarray:
     ])
 
 
+def true_max_drawdown(values) -> float:
+    """Max over t of (running max - value_t) / running max (peak-to-trough)."""
+    values  = np.asarray(values, dtype=np.float64)
+    running = np.maximum.accumulate(values)
+    return float(((running - values) / running).max())
+
+
+def equity_curve(env: StockTradingEnv) -> pd.DataFrame:
+    """Daily portfolio values of the episode, initial capital first."""
+    values = env.portfolio_history
+    return pd.DataFrame({
+        "step"           : range(len(values)),
+        "date"           : [str(env.common_dates[env.start_idx + i].date())
+                            for i in range(len(values))],
+        "portfolio_value": values,
+    })
+
+
 def run_episode(env: StockTradingEnv,
                 price_agent: PriceAgent = None,
                 sentiment_agent: SentimentAgent = None,
@@ -259,7 +299,8 @@ def run_episode(env: StockTradingEnv,
                     weights by (1 - cash_tilt) and add cash_tilt to cash.
     on_call       : called with each coordinator call's record (step,
                     date, prompt, response, weights, outcome, tokens).
-    Adds turnover and total_cost (as charged by the env) to the summary.
+    Adds turnover and total_cost (as charged by the env), max_drawdown_true
+    and equity_curve (a DataFrame, see equity_curve()) to the summary.
     """
     if agent_mode not in ("both", "price", "sentiment"):
         raise ValueError(f"agent_mode must be both/price/sentiment, got {agent_mode!r}")
@@ -371,6 +412,8 @@ def run_episode(env: StockTradingEnv,
     summary = env.get_episode_summary()
     summary["turnover"]   = turnover
     summary["total_cost"] = total_cost
+    summary["max_drawdown_true"] = true_max_drawdown(env.portfolio_history)
+    summary["equity_curve"] = equity_curve(env)
     summary["start_date"] = str(env.common_dates[env.start_idx].date())
     summary["end_date"]   = str(env.common_dates[env.start_idx + env.timestep].date())
     return summary
@@ -398,9 +441,14 @@ def _tagged(call_log: CallLog, **tags):
 def evaluate_test_period(config: dict, dirs: dict,
                          use_llm: bool = True,
                          call_log: CallLog = None,
-                         hold_interval: int = None) -> pd.DataFrame:
+                         hold_interval: int = None,
+                         period: str = "test",
+                         curves: list = None) -> pd.DataFrame:
     """
-    One full-test-period episode per strategy, same window for all.
+    One full-period episode per strategy, same window for all.
+    period: "test" (default) or "train" split.
+    curves: if given, each episode's equity curve is appended to it, tagged
+    with strategy and train_seed.
     Agent strategies are repeated per training seed (dirs maps
     train_seed -> checkpoint folder); the two benchmarks are deterministic
     so they run once. use_llm=False skips MARL+LLM.
@@ -409,17 +457,25 @@ def evaluate_test_period(config: dict, dirs: dict,
     """
     if hold_interval is None:
         hold_interval = call_frequency(config)
-    env = make_test_env(config, full_period=True)
-    print(f"\nFixed test-period episode: "
+    env = (make_test_env(config, full_period=True) if period == "test"
+           else make_train_env(config))
+    print(f"\nFixed {period}-period episode: "
           f"{env.common_dates[0].date()} → {env.common_dates[-1].date()} "
           f"({env.n_steps} trading days)")
 
     rows = []
+
+    def keep(summary: dict, strategy: str, train_seed):
+        curve = summary.pop("equity_curve")
+        summary.update(strategy=strategy, train_seed=train_seed)
+        rows.append(summary)
+        if curves is not None:
+            curves.append(curve.assign(strategy=strategy, train_seed=train_seed))
+
     for label, rebalance in BENCHMARKS.items():
         summary = run_episode(env, fixed_weights=BAH_WEIGHTS,
                               rebalance=rebalance)
-        summary.update(strategy=label, train_seed=None)
-        rows.append(summary)
+        keep(summary, label, None)
         _print_row(f"{label:29s}", summary)
 
     for train_seed, ckpt_dir in dirs.items():
@@ -429,11 +485,10 @@ def evaluate_test_period(config: dict, dirs: dict,
                                   use_llm=llm, config=config,
                                   agent_mode=mode, hold_every=hold,
                                   cash_tilt=tilt,
-                                  on_call=_tagged(call_log, phase="test_period",
+                                  on_call=_tagged(call_log, phase=f"{period}_period",
                                                   seed=train_seed,
                                                   strategy=label))
-            summary.update(strategy=label, train_seed=train_seed)
-            rows.append(summary)
+            keep(summary, label, train_seed)
             _print_row(f"{label:21s} train_seed={train_seed}", summary)
 
     return pd.DataFrame(rows)
@@ -477,6 +532,7 @@ def evaluate_multi_seed(ckpt_dir: str,
             on_call=_tagged(call_log, phase="robustness", seed=train_seed,
                             window_seed=seed, strategy=label)
         )
+        summary.pop("equity_curve")
         summary["seed"]     = seed
         summary["strategy"] = label
         rows.append(summary)
@@ -505,6 +561,7 @@ def buy_and_hold_multi_seed(config: dict,
     for seed in seeds:
         summary = run_episode(env, window_seed=seed,
                               fixed_weights=BAH_WEIGHTS, rebalance=rebalance)
+        summary.pop("equity_curve")
         summary["seed"]     = seed
         summary["strategy"] = label
         rows.append(summary)
@@ -520,7 +577,7 @@ def print_summary(df: pd.DataFrame, title: str):
     print("="*65)
 
     metrics = ["total_return", "sharpe_ratio", "max_drawdown",
-               "turnover", "total_cost"]
+               "max_drawdown_true", "turnover", "total_cost"]
 
     for strategy in df["strategy"].unique():
         subset = df[df["strategy"] == strategy]
@@ -554,6 +611,8 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
             "std_turnover"      : subset["turnover"].std(),
             "mean_total_cost"   : subset["total_cost"].mean(),
             "std_total_cost"    : subset["total_cost"].std(),
+            "mean_drawdown_true": subset["max_drawdown_true"].mean(),
+            "std_drawdown_true" : subset["max_drawdown_true"].std(),
         })
     out = pd.DataFrame(summary_rows)
     for col in [c for c in out.columns if c.startswith("std_")]:
@@ -569,7 +628,8 @@ def run_full_evaluation(config: dict,
                         use_llm: bool = True,
                         tag: str = None,
                         hold_interval: int = None,
-                        call_frequency_override: int = None):
+                        call_frequency_override: int = None,
+                        period: str = "test"):
     """
     1. Primary: fixed full-test-period episode for both benchmarks and
        every agent strategy (per training seed).
@@ -585,7 +645,14 @@ def run_full_evaluation(config: dict,
     call_frequency_override: replaces coordinator.call_frequency, so MARL+LLM
     and the *-hold20 controls share it (unless hold_interval is also given).
     The transaction cost rate is config environment.transaction_cost.
+    period="train" runs the primary episode on the training split instead
+    (no LLM, no robustness) and writes train_period_*.csv.
+    The daily values of every primary episode go to equity_curves.csv.
     """
+    if period not in PERIODS:
+        raise ValueError(f"period must be one of {PERIODS}, got {period!r}")
+    if period == "train" and (use_llm or robustness):
+        raise ValueError("period='train' needs use_llm=False and no robustness")
     if call_frequency_override is not None:
         if call_frequency_override < 1:
             raise ValueError("call_frequency_override must be >= 1")
@@ -613,15 +680,23 @@ def run_full_evaluation(config: dict,
     os.makedirs(log_dir, exist_ok=True)
     call_log = CallLog(os.path.join(log_dir, "coordinator_calls.jsonl")) if use_llm else None
 
+    curves = []
     test_df = evaluate_test_period(config, dirs, use_llm=use_llm, call_log=call_log,
-                                   hold_interval=hold_interval)
-    test_df.to_csv(os.path.join(log_dir, "test_period_results.csv"), index=False)
-    print(f"\nSaved → {os.path.join(log_dir, 'test_period_results.csv')}")
-    print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
+                                   hold_interval=hold_interval, period=period,
+                                   curves=curves)
+    results_csv = os.path.join(log_dir, f"{period}_period_results.csv")
+    test_df.to_csv(results_csv, index=False)
+    print(f"\nSaved → {results_csv}")
+    curves_csv = os.path.join(log_dir, "equity_curves.csv")
+    pd.concat(curves, ignore_index=True).to_csv(curves_csv, index=False)
+    print(f"Saved → {curves_csv}")
+    print_summary(test_df, f"FIXED {period.upper()}-PERIOD EPISODE "
+                           f"(spread = across training seeds)")
 
     test_summary = summarise(test_df)
-    test_summary.to_csv(os.path.join(log_dir, "test_period_summary.csv"), index=False)
-    print(f"Saved → {os.path.join(log_dir, 'test_period_summary.csv')}")
+    summary_csv = os.path.join(log_dir, f"{period}_period_summary.csv")
+    test_summary.to_csv(summary_csv, index=False)
+    print(f"Saved → {summary_csv}")
 
     # record the cadence this folder was produced with
     metadata = {"call_frequency": call_frequency(config),
@@ -629,6 +704,7 @@ def run_full_evaluation(config: dict,
                 "hold_interval": hold_interval,
                 "cost_rate": config["environment"]["transaction_cost"],
                 "use_llm": use_llm,
+                "period": period,
                 "train_seeds": list(train_seeds)}
     with open(os.path.join(log_dir, "run_metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
@@ -661,7 +737,7 @@ def run_full_evaluation(config: dict,
         print(f"Saved → {os.path.join(log_dir, 'robustness_windows_summary.csv')}")
 
     print("\n" + "="*65)
-    print("FINAL COMPARISON TABLE (fixed test period)")
+    print(f"FINAL COMPARISON TABLE (fixed {period} period)")
     print("="*65)
     print(test_summary.to_string(index=False))
 
@@ -673,6 +749,9 @@ def run_full_evaluation(config: dict,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate agents on the test split")
+    parser.add_argument("--period", choices=PERIODS, default="test",
+                        help="split of the fixed full-period episode "
+                             "(default: test; train needs --no-llm)")
     parser.add_argument("--checkpoint-root", type=str, default=None,
                         help="folder holding the seed{N}/ checkpoint folders; "
                              "default: paths.checkpoints_root in config.yaml")
@@ -700,6 +779,10 @@ if __name__ == "__main__":
                              "and the *-hold20 controls (default: "
                              "coordinator.call_frequency)")
     args = parser.parse_args()
+    if args.period == "train" and not args.no_llm:
+        parser.error("--period train requires --no-llm")
+    if args.period == "train" and args.robustness:
+        parser.error("--period train does not support --robustness")
 
     config = load_config()
     if args.cost_rate is not None:
@@ -715,4 +798,5 @@ if __name__ == "__main__":
         tag             = args.tag,
         hold_interval   = args.hold_interval,
         call_frequency_override = args.call_frequency,
+        period          = args.period,
     )

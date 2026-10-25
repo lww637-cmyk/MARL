@@ -1,0 +1,7 @@
+run,train_seed,n_calls,call_steps_ok,total_return_exact,sharpe_ratio_exact,max_drawdown_exact,final_value_exact,turnover_exact,total_cost_exact,n_steps_exact,prompts_matching,prompt_mismatch_steps
+llm_cf40,0,10,True,True,True,True,True,True,True,True,10,
+llm_cf40,1,10,True,True,True,True,True,True,True,True,10,
+llm_cf40,2,10,True,True,True,True,True,True,True,True,10,
+llm_cf40,3,10,True,True,True,True,True,True,True,True,10,
+llm_cf40,4,10,True,True,True,True,True,True,True,True,10,
+llm_cf40,5,10,True,True,True,True,True,True,True,True,10,
