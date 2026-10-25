@@ -34,6 +34,8 @@ labels are kept as-is so existing result files stay comparable. The value
 used is written to {log dir}/run_metadata.json.
 
 Sensitivity options (written to run_metadata.json as well):
+    --call-frequency N overrides coordinator.call_frequency for MARL+LLM and
+                       the *-hold20 controls together (default: config.yaml)
     --cost-rate R      transaction cost rate charged by the env (default:
                        environment.transaction_cost in config.yaml)
     --hold-interval N  hold schedule of the *-hold20 controls only (default:
@@ -566,7 +568,8 @@ def run_full_evaluation(config: dict,
                         checkpoint_root: str = None,
                         use_llm: bool = True,
                         tag: str = None,
-                        hold_interval: int = None):
+                        hold_interval: int = None,
+                        call_frequency_override: int = None):
     """
     1. Primary: fixed full-test-period episode for both benchmarks and
        every agent strategy (per training seed).
@@ -579,8 +582,20 @@ def run_full_evaluation(config: dict,
     Save results to results/logs/, or results/logs/{tag}/ when tag is given;
     with use_llm, coordinator calls go to coordinator_calls.jsonl there.
     hold_interval: schedule of the *-hold20 controls (default call_frequency).
+    call_frequency_override: replaces coordinator.call_frequency, so MARL+LLM
+    and the *-hold20 controls share it (unless hold_interval is also given).
     The transaction cost rate is config environment.transaction_cost.
     """
+    if call_frequency_override is not None:
+        if call_frequency_override < 1:
+            raise ValueError("call_frequency_override must be >= 1")
+        config = copy.deepcopy(config)
+        config.setdefault("coordinator", {})["call_frequency"] = int(call_frequency_override)
+        frequency_source = "--call-frequency"
+    elif config.get("coordinator", {}).get("call_frequency") is not None:
+        frequency_source = "config.yaml coordinator.call_frequency"
+    else:
+        frequency_source = "DEFAULT_CALL_FREQUENCY fallback"
     if hold_interval is None:
         hold_interval = call_frequency(config)
     if train_seeds is None:
@@ -610,9 +625,7 @@ def run_full_evaluation(config: dict,
 
     # record the cadence this folder was produced with
     metadata = {"call_frequency": call_frequency(config),
-                "call_frequency_source": "config.yaml coordinator.call_frequency"
-                    if config.get("coordinator", {}).get("call_frequency") is not None
-                    else "DEFAULT_CALL_FREQUENCY fallback",
+                "call_frequency_source": frequency_source,
                 "hold_interval": hold_interval,
                 "cost_rate": config["environment"]["transaction_cost"],
                 "use_llm": use_llm,
@@ -682,6 +695,10 @@ if __name__ == "__main__":
     parser.add_argument("--hold-interval", type=int, default=None,
                         help="hold schedule of the *-hold20 controls in "
                              "trading days (default: coordinator.call_frequency)")
+    parser.add_argument("--call-frequency", type=int, default=None,
+                        help="coordinator cadence in trading days for MARL+LLM "
+                             "and the *-hold20 controls (default: "
+                             "coordinator.call_frequency)")
     args = parser.parse_args()
 
     config = load_config()
@@ -697,4 +714,5 @@ if __name__ == "__main__":
         use_llm         = not args.no_llm,
         tag             = args.tag,
         hold_interval   = args.hold_interval,
+        call_frequency_override = args.call_frequency,
     )

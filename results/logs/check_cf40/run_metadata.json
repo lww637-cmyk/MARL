@@ -1,0 +1,15 @@
+{
+  "call_frequency": 40,
+  "call_frequency_source": "--call-frequency",
+  "hold_interval": 40,
+  "cost_rate": 0.001,
+  "use_llm": false,
+  "train_seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ]
+}
