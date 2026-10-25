@@ -33,6 +33,13 @@ missing). It drives both MARL+LLM and the *-hold20 controls; the "hold20"
 labels are kept as-is so existing result files stay comparable. The value
 used is written to {log dir}/run_metadata.json.
 
+Sensitivity options (written to run_metadata.json as well):
+    --cost-rate R      transaction cost rate charged by the env (default:
+                       environment.transaction_cost in config.yaml)
+    --hold-interval N  hold schedule of the *-hold20 controls only (default:
+                       call_frequency); labels stay "hold20", MARL+LLM keeps
+                       call_frequency
+
 Secondary robustness check (--robustness):
     Random-start windows of config episode_length inside the test split.
     All strategies use exactly the same windows (same seeds). The test split
@@ -58,6 +65,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import os
+import copy
 import json
 from collections import Counter
 from src.environment.stock_env import StockTradingEnv, TICKERS, N_TICKERS
@@ -387,14 +395,18 @@ def _tagged(call_log: CallLog, **tags):
 
 def evaluate_test_period(config: dict, dirs: dict,
                          use_llm: bool = True,
-                         call_log: CallLog = None) -> pd.DataFrame:
+                         call_log: CallLog = None,
+                         hold_interval: int = None) -> pd.DataFrame:
     """
     One full-test-period episode per strategy, same window for all.
     Agent strategies are repeated per training seed (dirs maps
     train_seed -> checkpoint folder); the two benchmarks are deterministic
     so they run once. use_llm=False skips MARL+LLM.
     Coordinator calls go to call_log, tagged with the training seed.
+    hold_interval sets the *-hold20 schedule (default call_frequency).
     """
+    if hold_interval is None:
+        hold_interval = call_frequency(config)
     env = make_test_env(config, full_period=True)
     print(f"\nFixed test-period episode: "
           f"{env.common_dates[0].date()} → {env.common_dates[-1].date()} "
@@ -410,7 +422,7 @@ def evaluate_test_period(config: dict, dirs: dict,
 
     for train_seed, ckpt_dir in dirs.items():
         price_agent, sentiment_agent = load_agents(env, config, ckpt_dir)
-        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, call_frequency(config)).items():
+        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, hold_interval).items():
             summary = run_episode(env, price_agent, sentiment_agent,
                                   use_llm=llm, config=config,
                                   agent_mode=mode, hold_every=hold,
@@ -553,7 +565,8 @@ def run_full_evaluation(config: dict,
                         window_seeds: list = None,
                         checkpoint_root: str = None,
                         use_llm: bool = True,
-                        tag: str = None):
+                        tag: str = None,
+                        hold_interval: int = None):
     """
     1. Primary: fixed full-test-period episode for both benchmarks and
        every agent strategy (per training seed).
@@ -565,7 +578,11 @@ def run_full_evaluation(config: dict,
     use_llm=False skips every MARL+LLM run, so Gemini is never called.
     Save results to results/logs/, or results/logs/{tag}/ when tag is given;
     with use_llm, coordinator calls go to coordinator_calls.jsonl there.
+    hold_interval: schedule of the *-hold20 controls (default call_frequency).
+    The transaction cost rate is config environment.transaction_cost.
     """
+    if hold_interval is None:
+        hold_interval = call_frequency(config)
     if train_seeds is None:
         train_seeds = DEFAULT_TRAIN_SEEDS
     if window_seeds is None:
@@ -581,7 +598,8 @@ def run_full_evaluation(config: dict,
     os.makedirs(log_dir, exist_ok=True)
     call_log = CallLog(os.path.join(log_dir, "coordinator_calls.jsonl")) if use_llm else None
 
-    test_df = evaluate_test_period(config, dirs, use_llm=use_llm, call_log=call_log)
+    test_df = evaluate_test_period(config, dirs, use_llm=use_llm, call_log=call_log,
+                                   hold_interval=hold_interval)
     test_df.to_csv(os.path.join(log_dir, "test_period_results.csv"), index=False)
     print(f"\nSaved → {os.path.join(log_dir, 'test_period_results.csv')}")
     print_summary(test_df, "FIXED TEST-PERIOD EPISODE (spread = across training seeds)")
@@ -595,6 +613,8 @@ def run_full_evaluation(config: dict,
                 "call_frequency_source": "config.yaml coordinator.call_frequency"
                     if config.get("coordinator", {}).get("call_frequency") is not None
                     else "DEFAULT_CALL_FREQUENCY fallback",
+                "hold_interval": hold_interval,
+                "cost_rate": config["environment"]["transaction_cost"],
                 "use_llm": use_llm,
                 "train_seeds": list(train_seeds)}
     with open(os.path.join(log_dir, "run_metadata.json"), "w") as f:
@@ -608,7 +628,7 @@ def run_full_evaluation(config: dict,
             buy_and_hold_multi_seed(config, window_seeds, rebalance=rebalance)
             for rebalance in BENCHMARKS.values()
         ]
-        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, call_frequency(config)).items():
+        for label, (mode, llm, hold, tilt) in agent_strategies(use_llm, hold_interval).items():
             rob_parts.append(evaluate_multi_seed(
                 ckpt_dir, config, seeds=window_seeds, use_llm=llm,
                 agent_mode=mode, label=label, hold_every=hold,
@@ -656,9 +676,18 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default=None,
                         help="write results to results/logs/{tag}/ "
                              "instead of results/logs/")
+    parser.add_argument("--cost-rate", type=float, default=None,
+                        help="transaction cost rate (default: "
+                             "environment.transaction_cost in config.yaml)")
+    parser.add_argument("--hold-interval", type=int, default=None,
+                        help="hold schedule of the *-hold20 controls in "
+                             "trading days (default: coordinator.call_frequency)")
     args = parser.parse_args()
 
     config = load_config()
+    if args.cost_rate is not None:
+        config = copy.deepcopy(config)
+        config["environment"]["transaction_cost"] = args.cost_rate
     run_full_evaluation(
         config,
         train_seeds     = args.train_seeds,
@@ -667,4 +696,5 @@ if __name__ == "__main__":
         checkpoint_root = args.checkpoint_root,
         use_llm         = not args.no_llm,
         tag             = args.tag,
+        hold_interval   = args.hold_interval,
     )
