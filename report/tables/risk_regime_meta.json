@@ -1,0 +1,24 @@
+{
+  "threshold_daily_vol": 0.018295172094269084,
+  "threshold_annualised_vol": 0.29042685332738843,
+  "threshold_quantile": 0.75,
+  "window": 20,
+  "vol_definition": "sample std (ddof=1) of the 20 equal-weight daily returns before day t (excludes day t)",
+  "threshold_source": "results/logs/dd_train equal_weight_daily_rebalanced",
+  "train_days_used": 937,
+  "train_first_last": [
+    "2018-10-10",
+    "2022-06-30"
+  ],
+  "test_days": 367,
+  "volatile_days": 63,
+  "sharpe": "mean/std(ddof=0)*sqrt(252), no risk-free rate",
+  "es95": "mean of daily returns <= empirical 5% quantile",
+  "sources": [
+    "dd_test",
+    "replay_final3",
+    "replay_final3_repeat",
+    "replay_llm_cf10",
+    "replay_llm_cf40"
+  ]
+}
