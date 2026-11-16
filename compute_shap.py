@@ -366,16 +366,233 @@ def run_shap_analysis(config: dict, ckpt_dir: str):
         print(f"  {f}")
 
 
+# ── multi-seed SHAP on the test period ───────────────────────────────────────
+
+SHAP_SEED    = 12345   # draws the explained / background steps and seeds KernelExplainer
+N_EXPLAIN    = 200     # test-period observations explained per seed and agent
+N_BACKGROUND = 100     # training-split observations used as background
+TABLES_DIR   = "report/tables"
+GROUPS       = ["price_indicators", "sentiment_features", "portfolio_cash_state"]
+SEED_SETS    = {"seeds 0-3": [0, 1, 2, 3], "seeds 4-5": [4, 5]}
+
+
+def feature_group(name: str) -> str:
+    """price_indicators, sentiment_features or portfolio_cash_state."""
+    if name.startswith("w_") or name == "portfolio_norm":
+        return "portfolio_cash_state"
+    if any(name.endswith("_" + f) for f in SENTIMENT_FEATURES):
+        return "sentiment_features"
+    return "price_indicators"
+
+
+class RecordingAgent:
+    """Delegates predict() to agent and keeps every observation it is given."""
+    def __init__(self, agent):
+        self.agent = agent
+        self.obs   = []
+
+    def predict(self, observation):
+        self.obs.append(np.array(observation, dtype=np.float32))
+        return self.agent.predict(observation)
+
+
+def period_observations(env: StockTradingEnv, price_agent, sentiment_agent) -> tuple:
+    """
+    Observations of both agents, one per step, along the full-period
+    MARL-no-coordinator episode (agent weights averaged every step), run by
+    evaluate_agents.run_episode. Returns (price_obs, sent_obs, summary).
+    """
+    from evaluate_agents import run_episode
+    price_rec, sent_rec = RecordingAgent(price_agent), RecordingAgent(sentiment_agent)
+    summary = run_episode(env, price_rec, sent_rec)
+    return np.array(price_rec.obs), np.array(sent_rec.obs), summary
+
+
+def make_batch_predict_fn(agent):
+    """
+    All six portfolio weights of the deterministic policy for a batch of
+    observations, mapped as in BaseAgent.predict (normalise_action):
+    clip to [0, 1] and divide by the sum, all-zero -> 100% cash.
+    """
+    def predict_fn(obs_array):
+        actions, _ = agent.model.predict(np.asarray(obs_array, dtype=np.float32),
+                                         deterministic=True)
+        actions = np.clip(actions.astype(np.float32), 0.0, 1.0)
+        total   = actions.sum(axis=1, keepdims=True)
+        cash    = np.zeros_like(actions)
+        cash[:, -1] = 1.0
+        return np.where(total > 1e-8, actions / np.maximum(total, 1e-8), cash)
+    return predict_fn
+
+
+def explain_agent(agent, background: np.ndarray, explained: np.ndarray,
+                  label: str) -> np.ndarray:
+    """
+    KernelExplainer SHAP values of the six output weights, shape
+    (n_explained, n_features, 6). Checks the batched predict against
+    agent.predict and SHAP additivity.
+    """
+    predict_fn = make_batch_predict_fn(agent)
+    outputs    = predict_fn(explained)
+    single     = np.array([agent.predict(o) for o in explained])
+    # batched and single-row float32 forward passes differ by ~1e-6
+    if not np.allclose(outputs, single, atol=1e-5):
+        raise RuntimeError(f"{label}: batched predict differs from agent.predict")
+    print(f"  {label}: output weight std over explained obs "
+          f"{outputs.std(axis=0).round(4)}")
+
+    np.random.seed(SHAP_SEED)
+    explainer = shap.KernelExplainer(predict_fn, background)
+    values    = explainer.shap_values(explained, silent=True)
+    values    = np.stack(values, axis=-1) if isinstance(values, list) else np.asarray(values)
+
+    additivity = np.abs(values.sum(axis=1) + np.asarray(explainer.expected_value)
+                        - outputs).max()
+    print(f"  {label}: SHAP {values.shape}, max additivity error {additivity:.2e}")
+    return values
+
+
+def importance_rows(values: np.ndarray, feature_names: list,
+                    seed: int, agent: str) -> tuple:
+    """
+    Long-format rows. Feature: mean over observations and the six output
+    weights of |SHAP|. Group: SHAP summed over the group's features (SHAP
+    is additive), then the same mean of |.|.
+    """
+    by_feature = np.abs(values).mean(axis=(0, 2))
+    feat_rows  = [{"seed": seed, "agent": agent, "feature": f, "value": v}
+                  for f, v in zip(feature_names, by_feature)]
+    groups     = np.array([feature_group(f) for f in feature_names])
+    group_rows = [{"seed": seed, "agent": agent, "feature": g,
+                   "value": np.abs(values[:, groups == g, :].sum(axis=1)).mean()}
+                  for g in GROUPS if (groups == g).any()]
+    return feat_rows, group_rows
+
+
+def check_return(summary: dict, results_csv: str, seed: int):
+    """The recorded episode must reproduce the logged MARL-no-coordinator return."""
+    df     = pd.read_csv(results_csv)
+    row    = df[(df["strategy"] == "MARL-no-coordinator") & (df["train_seed"] == seed)]
+    logged = float(row["total_return"].iloc[0])
+    if not np.isclose(summary["total_return"], logged, rtol=0, atol=1e-9):
+        raise RuntimeError(f"seed {seed}: recorded return {summary['total_return']} "
+                           f"!= logged {logged} in {results_csv}")
+    print(f"  return {summary['total_return']:.6f} matches {results_csv}")
+
+
+def print_seed_stats(df: pd.DataFrame, title: str, top_n: int = None):
+    """Per-seed values, then mean and std over seeds: all seeds and each SEED_SETS entry."""
+    wide = df.pivot_table(index=["agent", "feature"], columns="seed", values="value")
+    sets = {"all": sorted(df["seed"].unique()), **SEED_SETS}
+    for name, seeds in sets.items():
+        seeds = [s for s in seeds if s in wide.columns]
+        wide[f"mean {name}"] = wide[seeds].mean(axis=1)
+        wide[f"std {name}"]  = wide[seeds].std(axis=1, ddof=1)
+    print(f"\n{title}")
+    with pd.option_context("display.width", 250, "display.max_columns", 40,
+                           "display.float_format", "{:.5f}".format):
+        for agent, part in wide.groupby(level="agent"):
+            part = part.droplevel("agent").sort_values("mean all", ascending=False)
+            print(f"\n[{agent}]" + (f" top {top_n} by mean over all seeds" if top_n else ""))
+            print(part.head(top_n) if top_n else part)
+
+
+def print_rank_correlation(feat_df: pd.DataFrame):
+    """Spearman correlation of per-feature importance between seeds, per agent."""
+    print("\nRank correlation (Spearman) of per-feature importance between seeds")
+    low, high = SEED_SETS["seeds 0-3"], SEED_SETS["seeds 4-5"]
+    for agent, part in feat_df.groupby("agent"):
+        corr  = part.pivot(index="feature", columns="seed", values="value").corr(method="spearman")
+        seeds = list(corr.columns)
+
+        def mean_pairs(a, b):
+            pairs = {tuple(sorted((i, j))) for i in a for j in b if i != j}
+            return np.mean([corr.loc[i, j] for i, j in pairs])
+
+        print(f"\n[{agent}]")
+        print(corr.round(3).to_string())
+        print(f"  mean pairwise, all seeds        : {mean_pairs(seeds, seeds):.3f}")
+        print(f"  mean pairwise, within seeds 0-3 : {mean_pairs(low, low):.3f}")
+        print(f"  seed 4 vs seed 5                : {mean_pairs(high, high):.3f}")
+        print(f"  mean, seeds 0-3 vs seeds 4-5    : {mean_pairs(low, high):.3f}")
+        for s in high:
+            print(f"  mean, seed {s} vs seeds 0-3      : {mean_pairs([s], low):.3f}")
+
+
+def run_multi_seed_shap(config: dict, train_seeds: list, root: str = None):
+    """
+    SHAP of the deterministic price and sentiment policies for every seed
+    (checkpoints refused unless trained with the current setup):
+    N_EXPLAIN test-period observations explained against N_BACKGROUND
+    training-split observations, the steps drawn once with SHAP_SEED (same
+    steps for every seed). Observations come from each seed's full-period
+    MARL-no-coordinator episode. Writes report/tables/shap_by_feature.csv
+    and shap_by_group.csv.
+    """
+    from evaluate_agents import make_test_env, make_train_env
+
+    test_env  = make_test_env(config, full_period=True)
+    train_env = make_train_env(config)
+    rng       = np.random.default_rng(SHAP_SEED)
+    test_idx  = np.sort(rng.choice(test_env.episode_length, N_EXPLAIN, replace=False))
+    bg_idx    = np.sort(rng.choice(train_env.episode_length, N_BACKGROUND, replace=False))
+    print(f"Explaining {N_EXPLAIN} of {test_env.episode_length} test steps, "
+          f"background {N_BACKGROUND} of {train_env.episode_length} train steps "
+          f"(seed {SHAP_SEED})")
+
+    names = {"price": get_price_feature_names(), "sentiment": get_sentiment_feature_names()}
+    feat_rows, group_rows = [], []
+
+    for seed in train_seeds:
+        print(f"\n=== seed {seed} ===")
+        price_agent     = PriceAgent(test_env, config)
+        sentiment_agent = SentimentAgent(test_env, config)
+        load_checked_agents(checkpoint_dir(config, seed, root), config,
+                            [price_agent, sentiment_agent])
+
+        test_price, test_sent, summary = period_observations(test_env, price_agent, sentiment_agent)
+        check_return(summary, "results/logs/dd_test/test_period_results.csv", seed)
+        train_price, train_sent, summary = period_observations(train_env, price_agent, sentiment_agent)
+        check_return(summary, "results/logs/dd_train/train_period_results.csv", seed)
+
+        obs = {"price"    : (price_agent, train_price, test_price),
+               "sentiment": (sentiment_agent, train_sent, test_sent)}
+        for agent_name, (agent, train_obs, test_obs) in obs.items():
+            values = explain_agent(agent, train_obs[bg_idx], test_obs[test_idx],
+                                   f"seed {seed} {agent_name}")
+            f, g = importance_rows(values, names[agent_name], seed, agent_name)
+            feat_rows  += f
+            group_rows += g
+
+    feat_df  = pd.DataFrame(feat_rows)
+    group_df = pd.DataFrame(group_rows)
+    os.makedirs(TABLES_DIR, exist_ok=True)
+    feat_df.to_csv(f"{TABLES_DIR}/shap_by_feature.csv", index=False)
+    group_df.to_csv(f"{TABLES_DIR}/shap_by_group.csv", index=False)
+    print(f"\nSaved → {TABLES_DIR}/shap_by_feature.csv, {TABLES_DIR}/shap_by_group.csv")
+
+    print_seed_stats(group_df, "Mean |SHAP| per feature group (per seed, then mean/std over seeds)")
+    print_seed_stats(feat_df, "Mean |SHAP| per feature", top_n=15)
+    print_rank_correlation(feat_df)
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SHAP analysis of one training seed")
+    parser = argparse.ArgumentParser(description="SHAP analysis of one training seed, "
+                                                 "or of several with --seeds")
     parser.add_argument("--checkpoint-root", type=str, default=None,
                         help="folder holding the seed{N}/ checkpoint folders; "
                              "default: paths.checkpoints_root in config.yaml")
     parser.add_argument("--train-seed", type=int, default=0)
+    parser.add_argument("--seeds", type=int, nargs="+", default=None,
+                        help="multi-seed test-period SHAP (run_multi_seed_shap), "
+                             "writing report/tables/shap_by_{feature,group}.csv")
     args = parser.parse_args()
 
     config = load_config()
-    run_shap_analysis(
-        config,
-        checkpoint_dir(config, args.train_seed, args.checkpoint_root),
-    )
+    if args.seeds is not None:
+        run_multi_seed_shap(config, args.seeds, args.checkpoint_root)
+    else:
+        run_shap_analysis(
+            config,
+            checkpoint_dir(config, args.train_seed, args.checkpoint_root),
+        )
