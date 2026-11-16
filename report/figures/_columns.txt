@@ -1,0 +1,64 @@
+
+== train_vs_test_truedd.csv (11, 23)
+['strategy', 'n_train', 'n_test', 'train_mean_return', 'train_std_return', 'test_mean_return', 'test_std_return', 'diff_mean_return', 'train_mean_sharpe', 'train_std_sharpe', 'test_mean_sharpe', 'test_std_sharpe', 'diff_mean_sharpe', 'train_mean_drawdown_true', 'train_std_drawdown_true', 'test_mean_drawdown_true', 'test_std_drawdown_true', 'diff_mean_drawdown_true', 'train_mean_range ratio (not a drawdown)', 'train_std_range ratio (not a drawdown)', 'test_mean_range ratio (not a drawdown)', 'test_std_range ratio (not a drawdown)', 'diff_mean_range ratio (not a drawdown)']
+                        strategy  n_train  n_test  train_mean_return  train_std_return  test_mean_return  test_std_return  diff_mean_return  train_mean_sharpe  train_std_sharpe  test_mean_sharpe  test_std_sharpe  diff_mean_sharpe  train_mean_drawdown_true  train_std_drawdown_true  test_mean_drawdown_true  test_std_drawdown_true  diff_mean_drawdown_true  train_mean_range ratio (not a drawdown)  train_std_range ratio (not a drawdown)  test_mean_range ratio (not a drawdown)  test_std_range ratio (not a drawdown)  diff_mean_range ratio (not a drawdown)
+0                   buy_and_hold        1       1           0.565119               NaN          0.374841              NaN         -0.190278           0.532695               NaN          1.053476              NaN          0.520781                  0.369063                      NaN                 0.199444                     NaN                -0.169619                                 0.639987                                     NaN                                0.329012                                    NaN                               -0.310975
+1  equal_weight_daily_rebalanced        1       1           0.720637               NaN          0.416581              NaN         -0.304056           0.622283               NaN          1.129990              NaN          0.507707                  0.381929                      NaN                 0.200358                     NaN                -0.181571                                 0.634147                                     NaN                                0.349977                                    NaN                               -0.284170
+2            MARL-no-coordinator        6       6           8.220145          1.976464          0.045260         0.134320         -8.174884           1.713937          0.157464          0.249668         0.292516         -1.464269                  0.391105                 0.045036                 0.369211                0.062644                -0.021893                                 0.940752                                0.009120                                0.369944                               0.061920                               -0.570808
+3               price-agent-only        6       6          10.441097          5.510976         -0.051915         0.100493        -10.493012           1.684503          0.311034          0.021717         0.222380         -1.662786                  0.417245                 0.046659                 0.360004                0.081222                -0.057241                                 0.950044                                0.016123                                0.360004                               0.081222                               -0.590040
+
+== coordinator_behaviour.csv (119, 7)
+['scope', 'metric', 'asset', 'llm', 'average', 'value', 'n_calls']
+    scope         metric asset  llm  average     value  n_calls
+0  seed_0  mean_abs_diff  INTC  NaN      NaN  0.000073       19
+1  seed_0  mean_abs_diff   AMD  NaN      NaN  0.030884       19
+2  seed_0  mean_abs_diff    GS  NaN      NaN  0.009611       19
+3  seed_0  mean_abs_diff   CVX  NaN      NaN  0.001684       19
+
+== shap_group_shares.csv (24, 7)
+['seed', 'agent', 'group', 'n_features', 'group_importance', 'agent_total', 'share']
+   seed      agent                 group  n_features  group_importance  agent_total     share
+0     0      price  portfolio_cash_state           7          0.053187     0.390819  0.136091
+1     0      price      price_indicators          50          0.337632     0.390819  0.863909
+2     0  sentiment  portfolio_cash_state           7          0.143821     0.386073  0.372522
+3     0  sentiment    sentiment_features          20          0.242252     0.386073  0.627478
+
+== ablation_inputs.csv (72, 19)
+['train_seed', 'strategy', 'intervention', 'n_runs', 'return_mean', 'return_std', 'return_unmodified', 'delta_return_mean', 'delta_return_std', 'sharpe_mean', 'sharpe_std', 'sharpe_unmodified', 'delta_sharpe_mean', 'delta_sharpe_std', 'drawdown_true_mean', 'drawdown_true_std', 'drawdown_true_unmodified', 'delta_drawdown_true_mean', 'delta_drawdown_true_std']
+   train_seed               strategy   intervention  n_runs  return_mean  return_std  return_unmodified  delta_return_mean  delta_return_std  sharpe_mean  sharpe_std  sharpe_unmodified  delta_sharpe_mean  delta_sharpe_std  drawdown_true_mean  drawdown_true_std  drawdown_true_unmodified  delta_drawdown_true_mean  delta_drawdown_true_std
+0           0      price-only-hold20           none       1     0.493740         NaN           0.493740           0.000000               NaN     1.169593         NaN           1.169593           0.000000               NaN            0.218963                NaN                  0.218963                  0.000000                      NaN
+1           0      price-only-hold20     norm_const       1     0.452844         NaN           0.493740          -0.040896               NaN     1.105715         NaN           1.169593          -0.063878               NaN            0.217747                NaN                  0.218963                 -0.001216                      NaN
+2           0      price-only-hold20  shuffle_price      20     0.151481    0.257429           0.493740          -0.342259          0.257429     0.423027    0.548148           1.169593          -0.746566          0.548148            0.266344           0.094165                  0.218963                  0.047381                 0.094165
+3           0  sentiment-only-hold20           none       1     0.517594         NaN           0.517594           0.000000               NaN     0.928728         NaN           0.928728           0.000000               NaN            0.330649                NaN                  0.330649                  0.000000                      NaN
+
+== stress_episode.csv (80, 10)
+['strategy', 'train_seed', 'interval_N', 'source', 'fall_return', 'recovery_return', 'episode_return', 'episode_drawdown_true', 'worst_day', 'downside_capture']
+                        strategy  train_seed  interval_N   source  fall_return  recovery_return  episode_return  episode_drawdown_true  worst_day  downside_capture
+0                   buy_and_hold         NaN          20  dd_test    -0.199444         0.251937        0.002246               0.199444  -0.046245          0.995439
+1  equal_weight_daily_rebalanced         NaN          20  dd_test    -0.200358         0.254388        0.003061               0.200358  -0.047753          1.000000
+2            MARL-no-coordinator         0.0          20  dd_test    -0.281367         0.325584       -0.047392               0.285315  -0.062732          1.404322
+3               price-agent-only         0.0          20  dd_test    -0.227204         0.188114       -0.081830               0.251748  -0.073650          1.133992
+
+== stress_episode_paired.csv (15, 15)
+['comparison', 'metric', 'mean', 'std', 'n_positive', 'n_seeds', 'boot_ci_low', 'boot_ci_high', 'sign_test_p', 'seed0', 'seed1', 'seed2', 'seed3', 'seed4', 'seed5']
+                                 comparison                 metric      mean       std  n_positive  n_seeds  boot_ci_low  boot_ci_high  sign_test_p     seed0     seed1     seed2     seed3     seed4     seed5
+0        MARL+LLM minus MARL-average-hold20            fall_return  0.075519  0.057518           6        6     0.034316      0.116907      0.03125  0.055692  0.093082  0.017188  0.123997  0.152336  0.010817
+1        MARL+LLM minus MARL-average-hold20        recovery_return -0.006711  0.053237           3        6    -0.045879      0.031094      1.00000 -0.023236  0.008417 -0.090619  0.009908  0.072316 -0.017055
+2        MARL+LLM minus MARL-average-hold20  episode_drawdown_true -0.088971  0.083878           1        6    -0.149017     -0.029758      0.21875 -0.054635 -0.105627  0.025147 -0.169540 -0.194882 -0.034289
+3  MARL+LLM minus MARL-average-hold20-cash3            fall_return  0.067755  0.056529           6        6     0.027036      0.109942      0.03125  0.048439  0.084576  0.010831  0.115795  0.143117  0.003771
+
+== llm_across_intervals_truedd.csv (6, 13)
+['N', 'strategy', 'n_seeds', 'total_return_mean', 'total_return_std', 'sharpe_ratio_mean', 'sharpe_ratio_std', 'max_drawdown_true_mean', 'max_drawdown_true_std', 'range ratio (not a drawdown)_mean', 'range ratio (not a drawdown)_std', 'total_cost_mean', 'total_cost_std']
+    N             strategy  n_seeds  total_return_mean  total_return_std  sharpe_ratio_mean  sharpe_ratio_std  max_drawdown_true_mean  max_drawdown_true_std  range ratio (not a drawdown)_mean  range ratio (not a drawdown)_std  total_cost_mean  total_cost_std
+0  10             MARL+LLM        6           0.360044          0.169001           0.929793          0.300385                0.266476               0.023213                           0.350150                          0.078643      3425.387010      293.034576
+1  10  MARL-average-hold20        6           0.405942          0.242457           0.882965          0.385327                0.346648               0.060573                           0.433544                          0.100573      3643.996281      268.476015
+2  20             MARL+LLM        6           0.451976          0.147101           1.088460          0.234101                0.242497               0.017577                           0.378515                          0.051532      1965.747001      189.607338
+3  20  MARL-average-hold20        6           0.418688          0.130416           0.919268          0.156304                0.331919               0.082768                           0.422893                          0.064595      2014.196740      143.348084
+
+== risk_regimes_by_strategy.csv (45, 14)
+['strategy', 'interval_N', 'source', 'regime', 'n_seeds', 'share_days', 'mean_daily_return_mean', 'mean_daily_return_std', 'sharpe_ann_mean', 'sharpe_ann_std', 'worst_day_mean', 'worst_day_std', 'es95_mean', 'es95_std']
+                        strategy  interval_N   source    regime  n_seeds  share_days  mean_daily_return_mean  mean_daily_return_std  sharpe_ann_mean  sharpe_ann_std  worst_day_mean  worst_day_std  es95_mean  es95_std
+0                   buy_and_hold          20  dd_test      calm        1    0.828338                0.000528                    NaN         0.623882             NaN       -0.046245            NaN  -0.028873       NaN
+1                   buy_and_hold          20  dd_test  volatile        1    0.171662                0.003135                    NaN         2.545750             NaN       -0.044345            NaN  -0.032030       NaN
+2                   buy_and_hold          20  dd_test       all        1    1.000000                0.000976                    NaN         1.053477             NaN       -0.046245            NaN  -0.029877       NaN
+3  equal_weight_daily_rebalanced          20  dd_test      calm        1    0.828338                0.000628                    NaN         0.744860             NaN       -0.047217            NaN  -0.028446       NaN
