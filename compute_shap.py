@@ -426,7 +426,7 @@ def make_batch_predict_fn(agent):
 
 
 def explain_agent(agent, background: np.ndarray, explained: np.ndarray,
-                  label: str) -> np.ndarray:
+                  label: str, shap_seed: int = SHAP_SEED) -> np.ndarray:
     """
     KernelExplainer SHAP values of the six output weights, shape
     (n_explained, n_features, 6). Checks the batched predict against
@@ -441,7 +441,7 @@ def explain_agent(agent, background: np.ndarray, explained: np.ndarray,
     print(f"  {label}: output weight std over explained obs "
           f"{outputs.std(axis=0).round(4)}")
 
-    np.random.seed(SHAP_SEED)
+    np.random.seed(shap_seed)
     explainer = shap.KernelExplainer(predict_fn, background)
     values    = explainer.shap_values(explained, silent=True)
     values    = np.stack(values, axis=-1) if isinstance(values, list) else np.asarray(values)
@@ -519,7 +519,8 @@ def print_rank_correlation(feat_df: pd.DataFrame):
             print(f"  mean, seed {s} vs seeds 0-3      : {mean_pairs([s], low):.3f}")
 
 
-def run_multi_seed_shap(config: dict, train_seeds: list, root: str = None):
+def run_multi_seed_shap(config: dict, train_seeds: list, root: str = None,
+                        shap_seed: int = SHAP_SEED, out_dir: str = TABLES_DIR):
     """
     SHAP of the deterministic price and sentiment policies for every seed
     (checkpoints refused unless trained with the current setup):
@@ -527,18 +528,20 @@ def run_multi_seed_shap(config: dict, train_seeds: list, root: str = None):
     training-split observations, the steps drawn once with SHAP_SEED (same
     steps for every seed). Observations come from each seed's full-period
     MARL-no-coordinator episode. Writes report/tables/shap_by_feature.csv
-    and shap_by_group.csv.
+    and shap_by_group.csv. shap_seed / out_dir give an independent draw of
+    the explained and background steps (and the KernelExplainer seed),
+    written to another folder; the defaults reproduce the published tables.
     """
     from evaluate_agents import make_test_env, make_train_env
 
     test_env  = make_test_env(config, full_period=True)
     train_env = make_train_env(config)
-    rng       = np.random.default_rng(SHAP_SEED)
+    rng       = np.random.default_rng(shap_seed)
     test_idx  = np.sort(rng.choice(test_env.episode_length, N_EXPLAIN, replace=False))
     bg_idx    = np.sort(rng.choice(train_env.episode_length, N_BACKGROUND, replace=False))
     print(f"Explaining {N_EXPLAIN} of {test_env.episode_length} test steps, "
           f"background {N_BACKGROUND} of {train_env.episode_length} train steps "
-          f"(seed {SHAP_SEED})")
+          f"(seed {shap_seed})")
 
     names = {"price": get_price_feature_names(), "sentiment": get_sentiment_feature_names()}
     feat_rows, group_rows = [], []
@@ -559,17 +562,17 @@ def run_multi_seed_shap(config: dict, train_seeds: list, root: str = None):
                "sentiment": (sentiment_agent, train_sent, test_sent)}
         for agent_name, (agent, train_obs, test_obs) in obs.items():
             values = explain_agent(agent, train_obs[bg_idx], test_obs[test_idx],
-                                   f"seed {seed} {agent_name}")
+                                   f"seed {seed} {agent_name}", shap_seed)
             f, g = importance_rows(values, names[agent_name], seed, agent_name)
             feat_rows  += f
             group_rows += g
 
     feat_df  = pd.DataFrame(feat_rows)
     group_df = pd.DataFrame(group_rows)
-    os.makedirs(TABLES_DIR, exist_ok=True)
-    feat_df.to_csv(f"{TABLES_DIR}/shap_by_feature.csv", index=False)
-    group_df.to_csv(f"{TABLES_DIR}/shap_by_group.csv", index=False)
-    print(f"\nSaved → {TABLES_DIR}/shap_by_feature.csv, {TABLES_DIR}/shap_by_group.csv")
+    os.makedirs(out_dir, exist_ok=True)
+    feat_df.to_csv(f"{out_dir}/shap_by_feature.csv", index=False)
+    group_df.to_csv(f"{out_dir}/shap_by_group.csv", index=False)
+    print(f"\nSaved → {out_dir}/shap_by_feature.csv, {out_dir}/shap_by_group.csv")
 
     print_seed_stats(group_df, "Mean |SHAP| per feature group (per seed, then mean/std over seeds)")
     print_seed_stats(feat_df, "Mean |SHAP| per feature", top_n=15)
@@ -586,11 +589,17 @@ if __name__ == "__main__":
     parser.add_argument("--seeds", type=int, nargs="+", default=None,
                         help="multi-seed test-period SHAP (run_multi_seed_shap), "
                              "writing report/tables/shap_by_{feature,group}.csv")
+    parser.add_argument("--shap-seed", type=int, default=SHAP_SEED,
+                        help="with --seeds: seed of the explained/background "
+                             f"step draw and KernelExplainer (default {SHAP_SEED})")
+    parser.add_argument("--out-dir", type=str, default=TABLES_DIR,
+                        help=f"with --seeds: output folder (default {TABLES_DIR})")
     args = parser.parse_args()
 
     config = load_config()
     if args.seeds is not None:
-        run_multi_seed_shap(config, args.seeds, args.checkpoint_root)
+        run_multi_seed_shap(config, args.seeds, args.checkpoint_root,
+                            shap_seed=args.shap_seed, out_dir=args.out_dir)
     else:
         run_shap_analysis(
             config,

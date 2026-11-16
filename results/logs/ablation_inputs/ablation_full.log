@@ -1,0 +1,272 @@
+Test episode, hold interval 20, seeds [0, 1, 2, 3, 4, 5], cost rate 0.001
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed0/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed0/sentiment_agent_final.zip
+seed 0 price-only-hold20      unmodified reproduces log exactly (return +0.493740)
+seed 0 sentiment-only-hold20  unmodified reproduces log exactly (return +0.517594)
+seed 0 price-agent-only       unmodified reproduces log exactly (return -0.087456)
+seed 0 sentiment-agent-only   unmodified reproduces log exactly (return +0.256401)
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed1/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed1/sentiment_agent_final.zip
+seed 1 price-only-hold20      unmodified reproduces log exactly (return +0.193323)
+seed 1 sentiment-only-hold20  unmodified reproduces log exactly (return +1.035480)
+seed 1 price-agent-only       unmodified reproduces log exactly (return +0.012416)
+seed 1 sentiment-agent-only   unmodified reproduces log exactly (return +0.123403)
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed2/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed2/sentiment_agent_final.zip
+seed 2 price-only-hold20      unmodified reproduces log exactly (return +0.150558)
+seed 2 sentiment-only-hold20  unmodified reproduces log exactly (return +0.295015)
+seed 2 price-agent-only       unmodified reproduces log exactly (return +0.028184)
+seed 2 sentiment-agent-only   unmodified reproduces log exactly (return -0.099020)
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed3/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed3/sentiment_agent_final.zip
+seed 3 price-only-hold20      unmodified reproduces log exactly (return +0.451037)
+seed 3 sentiment-only-hold20  unmodified reproduces log exactly (return +1.054116)
+seed 3 price-agent-only       unmodified reproduces log exactly (return -0.221757)
+seed 3 sentiment-agent-only   unmodified reproduces log exactly (return +0.827972)
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed4/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed4/sentiment_agent_final.zip
+seed 4 price-only-hold20      unmodified reproduces log exactly (return +0.167804)
+seed 4 sentiment-only-hold20  unmodified reproduces log exactly (return +0.850296)
+seed 4 price-agent-only       unmodified reproduces log exactly (return -0.084578)
+seed 4 sentiment-agent-only   unmodified reproduces log exactly (return +0.334832)
+PriceAgent initialised | obs=(57,) | action=(6,)
+SentimentAgent initialised | obs=(27,) | action=(6,)
+Loaded price_agent from results/checkpoints_scaled/seed5/price_agent_final.zip
+Loaded sentiment_agent from results/checkpoints_scaled/seed5/sentiment_agent_final.zip
+seed 5 price-only-hold20      unmodified reproduces log exactly (return +0.584241)
+seed 5 sentiment-only-hold20  unmodified reproduces log exactly (return +0.076347)
+seed 5 price-agent-only       unmodified reproduces log exactly (return +0.041701)
+seed 5 sentiment-agent-only   unmodified reproduces log exactly (return -0.093341)
+
+return: unmodified, intervened mean (std over draws), change mean (std)
+train_seed                                              0                 1                 2                 3                 4                 5
+strategy              intervention                                                                                                                 
+price-agent-only      norm_const                  +0.0004           -0.0689           +0.0015           +0.0230           +0.0648           -0.0058
+                      shuffle_price      -0.1078 (0.1272)  -0.1654 (0.1590)  -0.0488 (0.3082)  +0.2079 (0.2937)  -0.0817 (0.1656)  -0.1019 (0.1968)
+price-only-hold20     norm_const                  -0.0409           +0.0073           +0.0063           +0.0410           +0.0087           -0.0327
+                      shuffle_price      -0.3423 (0.2574)  +0.0727 (0.2777)  +0.0034 (0.2555)  -0.0069 (0.3755)  +0.1496 (0.3239)  -0.2684 (0.2239)
+sentiment-agent-only  norm_const                  -0.0579           +0.1010           -0.0708           -0.1928           +0.0063           +0.0043
+                      shuffle_sentiment  -0.1721 (0.2188)  +0.1278 (0.1978)  +0.0880 (0.1783)  -0.1838 (0.1993)  +0.4273 (0.1900)  +0.2909 (0.3223)
+sentiment-only-hold20 norm_const                  -0.2201           -0.0153           +0.0000           +0.0000           +0.0000           +0.0226
+                      shuffle_sentiment  -0.0450 (0.4045)  -0.5017 (0.2671)  +0.2102 (0.3181)  -0.2615 (0.2300)  -0.0488 (0.2967)  +0.4115 (0.3132)
+ train_seed              strategy      intervention unmodified       intervened           change
+          0     price-only-hold20        norm_const    +0.4937          +0.4528          -0.0409
+          0     price-only-hold20     shuffle_price    +0.4937 +0.1515 (0.2574) -0.3423 (0.2574)
+          0 sentiment-only-hold20        norm_const    +0.5176          +0.2974          -0.2201
+          0 sentiment-only-hold20 shuffle_sentiment    +0.5176 +0.4726 (0.4045) -0.0450 (0.4045)
+          0      price-agent-only        norm_const    -0.0875          -0.0871          +0.0004
+          0      price-agent-only     shuffle_price    -0.0875 -0.1952 (0.1272) -0.1078 (0.1272)
+          0  sentiment-agent-only        norm_const    +0.2564          +0.1985          -0.0579
+          0  sentiment-agent-only shuffle_sentiment    +0.2564 +0.0843 (0.2188) -0.1721 (0.2188)
+          1     price-only-hold20        norm_const    +0.1933          +0.2006          +0.0073
+          1     price-only-hold20     shuffle_price    +0.1933 +0.2660 (0.2777) +0.0727 (0.2777)
+          1 sentiment-only-hold20        norm_const    +1.0355          +1.0202          -0.0153
+          1 sentiment-only-hold20 shuffle_sentiment    +1.0355 +0.5338 (0.2671) -0.5017 (0.2671)
+          1      price-agent-only        norm_const    +0.0124          -0.0565          -0.0689
+          1      price-agent-only     shuffle_price    +0.0124 -0.1529 (0.1590) -0.1654 (0.1590)
+          1  sentiment-agent-only        norm_const    +0.1234          +0.2244          +0.1010
+          1  sentiment-agent-only shuffle_sentiment    +0.1234 +0.2512 (0.1978) +0.1278 (0.1978)
+          2     price-only-hold20        norm_const    +0.1506          +0.1569          +0.0063
+          2     price-only-hold20     shuffle_price    +0.1506 +0.1539 (0.2555) +0.0034 (0.2555)
+          2 sentiment-only-hold20        norm_const    +0.2950          +0.2951          +0.0000
+          2 sentiment-only-hold20 shuffle_sentiment    +0.2950 +0.5053 (0.3181) +0.2102 (0.3181)
+          2      price-agent-only        norm_const    +0.0282          +0.0297          +0.0015
+          2      price-agent-only     shuffle_price    +0.0282 -0.0206 (0.3082) -0.0488 (0.3082)
+          2  sentiment-agent-only        norm_const    -0.0990          -0.1699          -0.0708
+          2  sentiment-agent-only shuffle_sentiment    -0.0990 -0.0110 (0.1783) +0.0880 (0.1783)
+          3     price-only-hold20        norm_const    +0.4510          +0.4920          +0.0410
+          3     price-only-hold20     shuffle_price    +0.4510 +0.4441 (0.3755) -0.0069 (0.3755)
+          3 sentiment-only-hold20        norm_const    +1.0541          +1.0541          +0.0000
+          3 sentiment-only-hold20 shuffle_sentiment    +1.0541 +0.7926 (0.2300) -0.2615 (0.2300)
+          3      price-agent-only        norm_const    -0.2218          -0.1988          +0.0230
+          3      price-agent-only     shuffle_price    -0.2218 -0.0138 (0.2937) +0.2079 (0.2937)
+          3  sentiment-agent-only        norm_const    +0.8280          +0.6352          -0.1928
+          3  sentiment-agent-only shuffle_sentiment    +0.8280 +0.6442 (0.1993) -0.1838 (0.1993)
+          4     price-only-hold20        norm_const    +0.1678          +0.1765          +0.0087
+          4     price-only-hold20     shuffle_price    +0.1678 +0.3174 (0.3239) +0.1496 (0.3239)
+          4 sentiment-only-hold20        norm_const    +0.8503          +0.8503          +0.0000
+          4 sentiment-only-hold20 shuffle_sentiment    +0.8503 +0.8015 (0.2967) -0.0488 (0.2967)
+          4      price-agent-only        norm_const    -0.0846          -0.0198          +0.0648
+          4      price-agent-only     shuffle_price    -0.0846 -0.1663 (0.1656) -0.0817 (0.1656)
+          4  sentiment-agent-only        norm_const    +0.3348          +0.3411          +0.0063
+          4  sentiment-agent-only shuffle_sentiment    +0.3348 +0.7622 (0.1900) +0.4273 (0.1900)
+          5     price-only-hold20        norm_const    +0.5842          +0.5516          -0.0327
+          5     price-only-hold20     shuffle_price    +0.5842 +0.3158 (0.2239) -0.2684 (0.2239)
+          5 sentiment-only-hold20        norm_const    +0.0763          +0.0990          +0.0226
+          5 sentiment-only-hold20 shuffle_sentiment    +0.0763 +0.4879 (0.3132) +0.4115 (0.3132)
+          5      price-agent-only        norm_const    +0.0417          +0.0359          -0.0058
+          5      price-agent-only     shuffle_price    +0.0417 -0.0602 (0.1968) -0.1019 (0.1968)
+          5  sentiment-agent-only        norm_const    -0.0933          -0.0890          +0.0043
+          5  sentiment-agent-only shuffle_sentiment    -0.0933 +0.1975 (0.3223) +0.2909 (0.3223)
+
+sharpe: unmodified, intervened mean (std over draws), change mean (std)
+train_seed                                              0                 1                 2                 3                 4                 5
+strategy              intervention                                                                                                                 
+price-agent-only      norm_const                  -0.0001           -0.2096           +0.0033           +0.0634           +0.1540           -0.0124
+                      shuffle_price      -0.3605 (0.4118)  -0.5696 (0.5431)  -0.2666 (0.8001)  +0.3751 (0.5739)  -0.2735 (0.4658)  -0.3078 (0.4868)
+price-only-hold20     norm_const                  -0.0639           +0.0170           +0.0158           +0.0654           +0.0184           -0.0504
+                      shuffle_price      -0.7466 (0.5481)  +0.1135 (0.5871)  -0.0476 (0.4957)  -0.0886 (0.5280)  +0.1702 (0.5944)  -0.5144 (0.3238)
+sentiment-agent-only  norm_const                  -0.0801           +0.1458           -0.1881           -0.1525           +0.0069           -0.0003
+                      shuffle_sentiment  -0.2874 (0.3577)  +0.1590 (0.2518)  +0.1621 (0.3798)  -0.1584 (0.1781)  +0.3743 (0.1498)  +0.4438 (0.4507)
+sentiment-only-hold20 norm_const                  -0.2842           -0.0153           +0.0001           +0.0000           +0.0000           +0.0410
+                      shuffle_sentiment  -0.1107 (0.5383)  -0.4329 (0.3420)  +0.2756 (0.4150)  -0.1799 (0.2010)  -0.0069 (0.2871)  +0.6005 (0.3940)
+ train_seed              strategy      intervention unmodified       intervened           change
+          0     price-only-hold20        norm_const    +1.1696          +1.1057          -0.0639
+          0     price-only-hold20     shuffle_price    +1.1696 +0.4230 (0.5481) -0.7466 (0.5481)
+          0 sentiment-only-hold20        norm_const    +0.9287          +0.6445          -0.2842
+          0 sentiment-only-hold20 shuffle_sentiment    +0.9287 +0.8180 (0.5383) -0.1107 (0.5383)
+          0      price-agent-only        norm_const    -0.1136          -0.1138          -0.0001
+          0      price-agent-only     shuffle_price    -0.1136 -0.4742 (0.4118) -0.3605 (0.4118)
+          0  sentiment-agent-only        norm_const    +0.5903          +0.5102          -0.0801
+          0  sentiment-agent-only shuffle_sentiment    +0.5903 +0.3029 (0.3577) -0.2874 (0.3577)
+          1     price-only-hold20        norm_const    +0.6247          +0.6416          +0.0170
+          1     price-only-hold20     shuffle_price    +0.6247 +0.7381 (0.5871) +0.1135 (0.5871)
+          1 sentiment-only-hold20        norm_const    +1.3226          +1.3073          -0.0153
+          1 sentiment-only-hold20 shuffle_sentiment    +1.3226 +0.8897 (0.3420) -0.4329 (0.3420)
+          1      price-agent-only        norm_const    +0.1507          -0.0589          -0.2096
+          1      price-agent-only     shuffle_price    +0.1507 -0.4189 (0.5431) -0.5696 (0.5431)
+          1  sentiment-agent-only        norm_const    +0.3999          +0.5457          +0.1458
+          1  sentiment-agent-only shuffle_sentiment    +0.3999 +0.5589 (0.2518) +0.1590 (0.2518)
+          2     price-only-hold20        norm_const    +0.4865          +0.5022          +0.0158
+          2     price-only-hold20     shuffle_price    +0.4865 +0.4389 (0.4957) -0.0476 (0.4957)
+          2 sentiment-only-hold20        norm_const    +0.6668          +0.6669          +0.0001
+          2 sentiment-only-hold20 shuffle_sentiment    +0.6668 +0.9424 (0.4150) +0.2756 (0.4150)
+          2      price-agent-only        norm_const    +0.2139          +0.2172          +0.0033
+          2      price-agent-only     shuffle_price    +0.2139 -0.0527 (0.8001) -0.2666 (0.8001)
+          2  sentiment-agent-only        norm_const    -0.0433          -0.2313          -0.1881
+          2  sentiment-agent-only shuffle_sentiment    -0.0433 +0.1188 (0.3798) +0.1621 (0.3798)
+          3     price-only-hold20        norm_const    +0.9355          +1.0008          +0.0654
+          3     price-only-hold20     shuffle_price    +0.9355 +0.8469 (0.5280) -0.0886 (0.5280)
+          3 sentiment-only-hold20        norm_const    +1.2735          +1.2735          +0.0000
+          3 sentiment-only-hold20 shuffle_sentiment    +1.2735 +1.0936 (0.2010) -0.1799 (0.2010)
+          3      price-agent-only        norm_const    -0.3258          -0.2623          +0.0634
+          3      price-agent-only     shuffle_price    -0.3258 +0.0494 (0.5739) +0.3751 (0.5739)
+          3  sentiment-agent-only        norm_const    +1.1056          +0.9531          -0.1525
+          3  sentiment-agent-only shuffle_sentiment    +1.1056 +0.9471 (0.1781) -0.1584 (0.1781)
+          4     price-only-hold20        norm_const    +0.5088          +0.5272          +0.0184
+          4     price-only-hold20     shuffle_price    +0.5088 +0.6790 (0.5944) +0.1702 (0.5944)
+          4 sentiment-only-hold20        norm_const    +1.0936          +1.0936          +0.0000
+          4 sentiment-only-hold20 shuffle_sentiment    +1.0936 +1.0867 (0.2871) -0.0069 (0.2871)
+          4      price-agent-only        norm_const    -0.0416          +0.1124          +0.1540
+          4      price-agent-only     shuffle_price    -0.0416 -0.3151 (0.4658) -0.2735 (0.4658)
+          4  sentiment-agent-only        norm_const    +0.6555          +0.6623          +0.0069
+          4  sentiment-agent-only shuffle_sentiment    +0.6555 +1.0298 (0.1498) +0.3743 (0.1498)
+          5     price-only-hold20        norm_const    +1.2641          +1.2137          -0.0504
+          5     price-only-hold20     shuffle_price    +1.2641 +0.7497 (0.3238) -0.5144 (0.3238)
+          5 sentiment-only-hold20        norm_const    +0.3198          +0.3608          +0.0410
+          5 sentiment-only-hold20 shuffle_sentiment    +0.3198 +0.9203 (0.3940) +0.6005 (0.3940)
+          5      price-agent-only        norm_const    +0.2466          +0.2343          -0.0124
+          5      price-agent-only     shuffle_price    +0.2466 -0.0611 (0.4868) -0.3078 (0.4868)
+          5  sentiment-agent-only        norm_const    +0.0106          +0.0103          -0.0003
+          5  sentiment-agent-only shuffle_sentiment    +0.0106 +0.4543 (0.4507) +0.4438 (0.4507)
+
+drawdown_true: unmodified, intervened mean (std over draws), change mean (std)
+train_seed                                              0                 1                 2                 3                 4                 5
+strategy              intervention                                                                                                                 
+price-agent-only      norm_const                  -0.0053           +0.0251           +0.0005           -0.0023           -0.0024           +0.0018
+                      shuffle_price      +0.0389 (0.0851)  +0.0557 (0.0800)  +0.0770 (0.1088)  -0.0471 (0.0906)  -0.0214 (0.0822)  -0.0423 (0.0821)
+price-only-hold20     norm_const                  -0.0012           +0.0009           +0.0000           +0.0000           -0.0076           +0.0004
+                      shuffle_price      +0.0474 (0.0942)  -0.0757 (0.0519)  +0.0480 (0.0740)  -0.1085 (0.0763)  -0.1128 (0.0872)  -0.0201 (0.0536)
+sentiment-agent-only  norm_const                  -0.0112           -0.0438           +0.0689           -0.0035           -0.0018           -0.0253
+                      shuffle_sentiment  +0.0835 (0.0782)  -0.0656 (0.0223)  +0.0015 (0.0748)  -0.0102 (0.0254)  -0.0409 (0.0269)  -0.0469 (0.0645)
+sentiment-only-hold20 norm_const                  +0.0953           +0.0000           +0.0000           +0.0000           +0.0000           +0.0065
+                      shuffle_sentiment  +0.0178 (0.0915)  -0.0183 (0.0653)  -0.0199 (0.0643)  -0.0237 (0.0740)  -0.0728 (0.0783)  +0.0202 (0.1017)
+ train_seed              strategy      intervention unmodified       intervened           change
+          0     price-only-hold20        norm_const    +0.2190          +0.2177          -0.0012
+          0     price-only-hold20     shuffle_price    +0.2190 +0.2663 (0.0942) +0.0474 (0.0942)
+          0 sentiment-only-hold20        norm_const    +0.3306          +0.4260          +0.0953
+          0 sentiment-only-hold20 shuffle_sentiment    +0.3306 +0.3484 (0.0915) +0.0178 (0.0915)
+          0      price-agent-only        norm_const    +0.3162          +0.3109          -0.0053
+          0      price-agent-only     shuffle_price    +0.3162 +0.3551 (0.0851) +0.0389 (0.0851)
+          0  sentiment-agent-only        norm_const    +0.3436          +0.3324          -0.0112
+          0  sentiment-agent-only shuffle_sentiment    +0.3436 +0.4271 (0.0782) +0.0835 (0.0782)
+          1     price-only-hold20        norm_const    +0.3098          +0.3108          +0.0009
+          1     price-only-hold20     shuffle_price    +0.3098 +0.2341 (0.0519) -0.0757 (0.0519)
+          1 sentiment-only-hold20        norm_const    +0.3970          +0.3970          +0.0000
+          1 sentiment-only-hold20 shuffle_sentiment    +0.3970 +0.3787 (0.0653) -0.0183 (0.0653)
+          1      price-agent-only        norm_const    +0.2935          +0.3186          +0.0251
+          1      price-agent-only     shuffle_price    +0.2935 +0.3492 (0.0800) +0.0557 (0.0800)
+          1  sentiment-agent-only        norm_const    +0.4860          +0.4422          -0.0438
+          1  sentiment-agent-only shuffle_sentiment    +0.4860 +0.4204 (0.0223) -0.0656 (0.0223)
+          2     price-only-hold20        norm_const    +0.2523          +0.2523          +0.0000
+          2     price-only-hold20     shuffle_price    +0.2523 +0.3003 (0.0740) +0.0480 (0.0740)
+          2 sentiment-only-hold20        norm_const    +0.3048          +0.3048          +0.0000
+          2 sentiment-only-hold20 shuffle_sentiment    +0.3048 +0.2849 (0.0643) -0.0199 (0.0643)
+          2      price-agent-only        norm_const    +0.2557          +0.2562          +0.0005
+          2      price-agent-only     shuffle_price    +0.2557 +0.3327 (0.1088) +0.0770 (0.1088)
+          2  sentiment-agent-only        norm_const    +0.3947          +0.4636          +0.0689
+          2  sentiment-agent-only shuffle_sentiment    +0.3947 +0.3961 (0.0748) +0.0015 (0.0748)
+          3     price-only-hold20        norm_const    +0.4064          +0.4064          +0.0000
+          3     price-only-hold20     shuffle_price    +0.4064 +0.2980 (0.0763) -0.1085 (0.0763)
+          3 sentiment-only-hold20        norm_const    +0.3970          +0.3970          +0.0000
+          3 sentiment-only-hold20 shuffle_sentiment    +0.3970 +0.3733 (0.0740) -0.0237 (0.0740)
+          3      price-agent-only        norm_const    +0.4410          +0.4387          -0.0023
+          3      price-agent-only     shuffle_price    +0.4410 +0.3939 (0.0906) -0.0471 (0.0906)
+          3  sentiment-agent-only        norm_const    +0.4434          +0.4398          -0.0035
+          3  sentiment-agent-only shuffle_sentiment    +0.4434 +0.4332 (0.0254) -0.0102 (0.0254)
+          4     price-only-hold20        norm_const    +0.4017          +0.3941          -0.0076
+          4     price-only-hold20     shuffle_price    +0.4017 +0.2889 (0.0872) -0.1128 (0.0872)
+          4 sentiment-only-hold20        norm_const    +0.4616          +0.4616          +0.0000
+          4 sentiment-only-hold20 shuffle_sentiment    +0.4616 +0.3888 (0.0783) -0.0728 (0.0783)
+          4      price-agent-only        norm_const    +0.4386          +0.4362          -0.0024
+          4      price-agent-only     shuffle_price    +0.4386 +0.4172 (0.0822) -0.0214 (0.0822)
+          4  sentiment-agent-only        norm_const    +0.4871          +0.4853          -0.0018
+          4  sentiment-agent-only shuffle_sentiment    +0.4871 +0.4462 (0.0269) -0.0409 (0.0269)
+          5     price-only-hold20        norm_const    +0.2950          +0.2954          +0.0004
+          5     price-only-hold20     shuffle_price    +0.2950 +0.2748 (0.0536) -0.0201 (0.0536)
+          5 sentiment-only-hold20        norm_const    +0.3024          +0.3090          +0.0065
+          5 sentiment-only-hold20 shuffle_sentiment    +0.3024 +0.3226 (0.1017) +0.0202 (0.1017)
+          5      price-agent-only        norm_const    +0.4150          +0.4168          +0.0018
+          5      price-agent-only     shuffle_price    +0.4150 +0.3727 (0.0821) -0.0423 (0.0821)
+          5  sentiment-agent-only        norm_const    +0.4302          +0.4050          -0.0253
+          5  sentiment-agent-only shuffle_sentiment    +0.4302 +0.3834 (0.0645) -0.0469 (0.0645)
+
+Change vs unmodified, mean over seeds of per-seed mean change (std over seeds)
+
+return
+                                           mean     std
+strategy              intervention                     
+price-only-hold20     norm_const        -0.0017 +0.0302
+                      shuffle_price     -0.0653 +0.1956
+sentiment-only-hold20 norm_const        -0.0355 +0.0913
+                      shuffle_sentiment -0.0392 +0.3252
+price-agent-only      norm_const        +0.0025 +0.0435
+                      shuffle_price     -0.0496 +0.1318
+sentiment-agent-only  norm_const        -0.0350 +0.0984
+                      shuffle_sentiment +0.0964 +0.2445
+
+sharpe
+                                           mean     std
+strategy              intervention                     
+price-only-hold20     norm_const        +0.0004 +0.0485
+                      shuffle_price     -0.1856 +0.3653
+sentiment-only-hold20 norm_const        -0.0431 +0.1196
+                      shuffle_sentiment +0.0243 +0.3647
+price-agent-only      norm_const        -0.0002 +0.1199
+                      shuffle_price     -0.2338 +0.3187
+sentiment-agent-only  norm_const        -0.0447 +0.1219
+                      shuffle_sentiment +0.1156 +0.2885
+
+drawdown_true
+                                           mean     std
+strategy              intervention                     
+price-only-hold20     norm_const        -0.0012 +0.0032
+                      shuffle_price     -0.0370 +0.0735
+sentiment-only-hold20 norm_const        +0.0170 +0.0385
+                      shuffle_sentiment -0.0161 +0.0339
+price-agent-only      norm_const        +0.0029 +0.0112
+                      shuffle_price     +0.0101 +0.0536
+sentiment-agent-only  norm_const        -0.0028 +0.0385
+                      shuffle_sentiment -0.0131 +0.0533
+
+Wrote report/tables/ablation_inputs.csv, ablation_inputs_draws.csv
