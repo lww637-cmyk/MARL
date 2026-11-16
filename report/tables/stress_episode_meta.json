@@ -1,0 +1,16 @@
+{
+  "benchmark": "equal_weight_daily_rebalanced",
+  "source": "results/logs/dd_test/equity_curves.csv",
+  "peak_date": "2022-08-18",
+  "trough_date": "2022-09-30",
+  "recovery_date": "2022-11-30",
+  "recovered": true,
+  "fall_days": 30,
+  "recovery_days": 42,
+  "episode_days": 72,
+  "benchmark_max_drawdown_true": 0.20035784283204122,
+  "benchmark_peak_value": 115152.81141389631,
+  "benchmark_trough_value": 92081.0425229632,
+  "benchmark_recovery_value": 115505.32931821852,
+  "note": "Dates fixed from the equal-weight daily rebalanced benchmark only; day counts are trading days (steps). If not recovered, recovery_date is the last test date."
+}
