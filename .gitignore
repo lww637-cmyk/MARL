@@ -14,3 +14,7 @@ mlruns/
 mlflow.db
 TASK*.md
 UPDATE.md
+
+_archive/
+
+results/logs/standin/

@@ -9,7 +9,7 @@ import sys, re
 import pandas as pd
 
 src = sys.argv[1]
-log = open("scan_coverage.log", "w", encoding="utf-8")
+log = open("data/raw/scan_coverage.log", "w", encoding="utf-8")
 def say(*a):
     s = " ".join(str(x) for x in a)
     print(s, flush=True); log.write(s + "\n"); log.flush()
@@ -38,7 +38,7 @@ for chunk in pd.read_csv(src, usecols=lambda c: norm(c) in need, chunksize=500_0
         say(f"scanned {total:,} rows")
 
 df = pd.concat(parts).groupby(["ticker", "month"], as_index=False)["n"].sum()
-df.to_csv("monthly_counts.csv", index=False)
+df.to_csv("data/raw/monthly_counts.csv", index=False)
 say(f"\nTOTAL ROWS SCANNED: {total:,} | rows with unparseable date: {bad:,}")
 say(f"Distinct tickers: {df.ticker.nunique():,}")
 
