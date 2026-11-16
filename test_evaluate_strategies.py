@@ -130,11 +130,28 @@ except ValueError:
     pass
 print("*-hold20-cash OK")
 
+# 4c. Static control: fixed target on the hold schedule, agents never queried;
+#     same as daily rebalancing to those weights (only the initial buy trades)
+static_target = np.array([0.1, 0.3, 0.2, 0.15, 0.05, 0.2])
+static = ev.run_episode(env, hold_every=ev.DEFAULT_CALL_FREQUENCY,
+                        target_weights=static_target)
+fixed = ev.run_episode(env, fixed_weights=static_target, rebalance=True)
+assert np.isclose(static["final_value"], fixed["final_value"], rtol=1e-6)
+assert np.isclose(static["turnover"], 2.0 * (1 - 0.2), rtol=1e-6)
+try:
+    ev.run_episode(env, target_weights=static_target)
+    raise AssertionError("target_weights without hold_every accepted")
+except ValueError:
+    pass
+print("*-static-hold20 OK")
+
 # 5. Full run with --no-llm and --tag: all non-LLM strategies, no Gemini, dash when n=1
 ev.make_test_env  = lambda config, full_period: StandInEnv(full_period)
 ev.load_agents    = lambda env, config, d: (price_agent, sentiment_agent)
 ev.training_setup = lambda config: {}
 ev.check_setup    = lambda d, setup: None
+STATIC_W = {"price": static_target, "sentiment": static_target[::-1].copy()}
+ev.train_mean_weights = lambda config, d: STATIC_W
 cwd = os.getcwd()
 with tempfile.TemporaryDirectory() as d:
     os.chdir(d)
@@ -147,7 +164,10 @@ with tempfile.TemporaryDirectory() as d:
         assert sorted(os.listdir(out)) == sorted([
             "test_period_results.csv", "test_period_summary.csv",
             "robustness_windows_results.csv", "robustness_windows_summary.csv",
-            "run_metadata.json", "equity_curves.csv"])
+            "run_metadata.json", "equity_curves.csv", "static_weights.csv"])
+        sw = pd.read_csv(os.path.join(out, "static_weights.csv"))
+        assert len(sw) == 4 and np.allclose(
+            sw[sw["strategy"] == "price-static-hold20"][list(TICKERS) + ["cash"]], static_target)
         with open(os.path.join(out, "run_metadata.json")) as f:
             meta = json.load(f)
         assert meta["cost_rate"] == COST, meta
@@ -164,8 +184,9 @@ expected_strategies = ["buy_and_hold", "equal_weight_daily_rebalanced", "MARL-no
                        "price-only-hold20", "sentiment-only-hold20",
                        "MARL-average-hold20-cash3", "MARL-average-hold20-cash5.5",
                        "MARL-average-hold20-cash8"]
-assert list(summary["strategy"]) == expected_strategies, list(summary["strategy"])
-assert sorted(rob["strategy"]) == sorted(expected_strategies)
+static_strategies = ["price-static-hold20", "sentiment-static-hold20"]
+assert list(summary["strategy"]) == expected_strategies + static_strategies, list(summary["strategy"])
+assert sorted(rob["strategy"]) == sorted(expected_strategies)   # static: fixed period only
 assert "src.coordinator.llm_coordinator" not in sys.modules
 for col in ["turnover", "total_cost"]:
     assert df[col].notna().all() and (df[col] > 0).all()

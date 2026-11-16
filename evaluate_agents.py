@@ -25,6 +25,16 @@ Primary evaluation:
                                     tilt c = 0.03 / 0.055 / 0.08: at each
                                     rebalance the averaged stock weights are
                                     scaled by (1 - c) and c is added to cash
+      price-static-hold20           static control (no LLM): the price
+                                    agent's MEAN deterministic allocation
+                                    (six weights incl. cash) over the
+                                    TRAINING split, as in policy_check.py,
+                                    held fixed on the test period with the
+                                    same rebalance schedule and costs as the
+                                    *-hold20 controls
+      sentiment-static-hold20       the same for the sentiment agent
+    The static weights per seed go to {log dir}/static_weights.csv. The
+    static controls are fixed-period only (not in --robustness).
     The agent strategies are run once per
     training seed ({checkpoint root}/seed{N}/) to report variance
     across training seeds. Each seed folder must hold a
@@ -130,6 +140,12 @@ AGENT_STRATEGIES = {
     "MARL-average-hold20-cash5.5": ("both", False, True, 0.055),
     "MARL-average-hold20-cash8"  : ("both", False, True, 0.08),
     "MARL+LLM"                  : ("both", True, False, None),
+}
+
+# static control label -> agent whose mean TRAINING-split allocation is held
+STATIC_STRATEGIES = {
+    "price-static-hold20"    : "price",
+    "sentiment-static-hold20": "sentiment",
 }
 
 
@@ -252,6 +268,28 @@ def _ticker_returns(env: StockTradingEnv, idx: int) -> np.ndarray:
     ])
 
 
+def train_mean_weights(config: dict, ckpt_dir: str) -> dict:
+    """
+    {"price": w, "sentiment": w}: each agent's mean deterministic allocation
+    (N_TICKERS stock weights + cash) over every TRAINING-split day, computed
+    exactly as policy_check.py does (own train env, start_idx = day,
+    timestep = 0, setup-checked checkpoints).
+    """
+    env = StockTradingEnv(config, mode="eval", split="train")
+    env.reset(seed=0)
+    agents = {"price": PriceAgent(env, config),
+              "sentiment": SentimentAgent(env, config)}
+    load_checked_agents(ckpt_dir, config, list(agents.values()))
+    out = {}
+    for name, agent in agents.items():
+        weights = []
+        for i in range(env.n_steps):
+            env.start_idx, env.timestep = i, 0
+            weights.append(agent.predict(env.observe(agent.agent_id)))
+        out[name] = np.asarray(weights, dtype=np.float64).mean(axis=0)
+    return out
+
+
 def true_max_drawdown(values) -> float:
     """Max over t of (running max - value_t) / running max (peak-to-trough)."""
     values  = np.asarray(values, dtype=np.float64)
@@ -281,6 +319,7 @@ def run_episode(env: StockTradingEnv,
                 agent_mode: str = "both",
                 hold_every: int = None,
                 cash_tilt: float = None,
+                target_weights: np.ndarray = None,
                 on_call=None) -> dict:
     """
     Run one evaluation episode on the window selected by reset_window().
@@ -297,6 +336,9 @@ def run_episode(env: StockTradingEnv,
                     between. None recomputes every step.
     cash_tilt     : with hold_every, at each recompute scale the stock
                     weights by (1 - cash_tilt) and add cash_tilt to cash.
+    target_weights: with hold_every, the target set at each recompute is
+                    this fixed vector instead of the agents' action (the
+                    *-static-hold20 controls); agents are not queried.
     on_call       : called with each coordinator call's record (step,
                     date, prompt, response, weights, outcome, tokens).
     Adds turnover and total_cost (as charged by the env), max_drawdown_true
@@ -306,6 +348,9 @@ def run_episode(env: StockTradingEnv,
         raise ValueError(f"agent_mode must be both/price/sentiment, got {agent_mode!r}")
     if cash_tilt is not None and (hold_every is None or use_llm):
         raise ValueError("cash_tilt needs hold_every and no LLM")
+    if target_weights is not None and (hold_every is None or use_llm
+                                       or cash_tilt is not None):
+        raise ValueError("target_weights needs hold_every, no LLM, no cash_tilt")
     reset_window(env, window_seed)
 
     held       = None   # drifted buy-and-hold weights after the first buy
@@ -328,6 +373,11 @@ def run_episode(env: StockTradingEnv,
 
         if fixed_weights is not None:
             final_weights = fixed_weights if held is None else held
+        elif target_weights is not None:
+            # static control: same hold schedule, fixed target
+            if step % hold_every == 0:
+                cached_hold_weights = np.asarray(target_weights, dtype=np.float32)
+            final_weights = cached_hold_weights
         else:
             # Get observations for both agents
             price_obs = env.observe("price_agent")
@@ -443,7 +493,8 @@ def evaluate_test_period(config: dict, dirs: dict,
                          call_log: CallLog = None,
                          hold_interval: int = None,
                          period: str = "test",
-                         curves: list = None) -> pd.DataFrame:
+                         curves: list = None,
+                         static_rows: list = None) -> pd.DataFrame:
     """
     One full-period episode per strategy, same window for all.
     period: "test" (default) or "train" split.
@@ -454,6 +505,8 @@ def evaluate_test_period(config: dict, dirs: dict,
     so they run once. use_llm=False skips MARL+LLM.
     Coordinator calls go to call_log, tagged with the training seed.
     hold_interval sets the *-hold20 schedule (default call_frequency).
+    The *-static-hold20 controls run after the other agent strategies of
+    each seed; their weights are appended to static_rows when given.
     """
     if hold_interval is None:
         hold_interval = call_frequency(config)
@@ -488,6 +541,17 @@ def evaluate_test_period(config: dict, dirs: dict,
                                   on_call=_tagged(call_log, phase=f"{period}_period",
                                                   seed=train_seed,
                                                   strategy=label))
+            keep(summary, label, train_seed)
+            _print_row(f"{label:21s} train_seed={train_seed}", summary)
+
+        static = train_mean_weights(config, ckpt_dir)
+        for label, agent in STATIC_STRATEGIES.items():
+            if static_rows is not None:
+                static_rows.append({"strategy": label, "train_seed": train_seed,
+                                    **dict(zip(list(TICKERS) + ["cash"],
+                                               static[agent]))})
+            summary = run_episode(env, hold_every=hold_interval,
+                                  target_weights=static[agent])
             keep(summary, label, train_seed)
             _print_row(f"{label:21s} train_seed={train_seed}", summary)
 
@@ -680,10 +744,13 @@ def run_full_evaluation(config: dict,
     os.makedirs(log_dir, exist_ok=True)
     call_log = CallLog(os.path.join(log_dir, "coordinator_calls.jsonl")) if use_llm else None
 
-    curves = []
+    curves, static_rows = [], []
     test_df = evaluate_test_period(config, dirs, use_llm=use_llm, call_log=call_log,
                                    hold_interval=hold_interval, period=period,
-                                   curves=curves)
+                                   curves=curves, static_rows=static_rows)
+    static_csv = os.path.join(log_dir, "static_weights.csv")
+    pd.DataFrame(static_rows).to_csv(static_csv, index=False)
+    print(f"Saved → {static_csv} (mean training-split weights)")
     results_csv = os.path.join(log_dir, f"{period}_period_results.csv")
     test_df.to_csv(results_csv, index=False)
     print(f"\nSaved → {results_csv}")
